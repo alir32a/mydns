@@ -1,5 +1,3 @@
-use std::io::{Result};
-use crate::util::{u16_to_u8,bool_to_u8};
 
 #[derive(Default, Debug)]
 pub struct Header {

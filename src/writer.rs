@@ -1,4 +1,3 @@
-use std::ops::Index;
 use anyhow::{bail, Result};
 use crate::header::Header;
 use crate::question::Question;
@@ -113,25 +112,25 @@ impl PacketWriter {
         Ok(())
     }
 
-    fn write(&mut self, value: u8) -> anyhow::Result<()> {
+    fn write(&mut self, value: u8) -> Result<()> {
         if self.offset >= 512 {
             bail!("End Of Buffer");
         }
 
-        self.buf[self.offset] = value;
+        self.buf[self.offset as usize] = value;
         self.offset += 1;
 
         Ok(())
     }
 
-    fn write_u16(&mut self, value: u16) -> anyhow::Result<()> {
+    fn write_u16(&mut self, value: u16) -> Result<()> {
         self.write(((value >> 8) & 0xFF) as u8)?;
         self.write((value & 0xFF) as u8)?;
 
         Ok(())
     }
 
-    fn write_u32(&mut self, value: u32) -> anyhow::Result<()> {
+    fn write_u32(&mut self, value: u32) -> Result<()> {
         self.write(((value >> 24) & 0xFF) as u8)?;
         self.write(((value >> 16) & 0xFF) as u8)?;
         self.write(((value >> 8) & 0xFF) as u8)?;

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::net::Ipv4Addr;
 use crate::parser::PacketParser;
 use crate::query_type::QueryType;

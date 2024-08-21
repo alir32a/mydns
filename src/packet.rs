@@ -1,7 +1,4 @@
-use std::fs::File;
-use std::io::{Result, Error, ErrorKind, Write};
 use crate::header::Header;
-use crate::query_type::QueryType;
 use crate::question::Question;
 use crate::record::Record;
 
