@@ -205,8 +205,4 @@ impl PacketParser {
 
         Ok(res)
     }
-
-    pub fn write(packet: &Packet) -> Result<Vec<u8>> {
-        todo!()
-    }
 }

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use std::net::Ipv4Addr;
-use crate::packet_parser::PacketParser;
+use crate::parser::PacketParser;
 use crate::query_type::QueryType;
 
 #[derive(Debug)]

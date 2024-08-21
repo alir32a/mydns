@@ -5,11 +5,12 @@ mod util;
 mod question;
 mod query_type;
 mod record;
-mod packet_parser;
+mod parser;
+mod writer;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use crate::packet::Packet;
-use crate::packet_parser::PacketParser;
+use crate::parser::PacketParser;
 use clap::{Parser};
 use tracing::{info, error, Level};
 use tracing_subscriber::FmtSubscriber;
