@@ -1,67 +1,117 @@
+use std::io::Write;
 use anyhow::{bail, Result};
+use tracing::warn;
+use crate::bytes_util::BytesUtil;
+use crate::dns_class::DNSClass;
 use crate::header::Header;
+use crate::packet::Packet;
+use crate::pair::BytesPair;
+use crate::dns_type::DNSType;
 use crate::question::Question;
-use crate::util::{bool_to_u8, u16_to_u8};
+use crate::record::Record;
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct PacketWriter {
+    pub packet: Packet,
     buf: Vec<u8>,
     offset: u16,
-    questions_len: u16,
-    answers_offset: u16,
-    answers_len: u16,
-    authorities_offset: u16,
-    authorities_len: u16,
-    resources_offset: u16,
 }
 
 impl PacketWriter {
     pub fn new() -> PacketWriter {
         PacketWriter {
-            buf: Vec::with_capacity(512),
+            buf: vec![0],
             offset: 0,
             ..Default::default()
         }
     }
 
-    pub fn write_header(&mut self, header: &Header) -> Result<()> {
+    pub fn from(packet: Packet) -> PacketWriter {
+        PacketWriter {
+            packet,
+            buf: Vec::from([0u8; 512]),
+            offset: 0,
+        }
+    }
+
+    pub fn write(&mut self) -> Result<&Vec<u8>> {
+        // reset the buffer before any writes to the buf
+        self.buf.clear();
+
+        self.write_header()?;
+        self.write_questions()?;
+        self.write_bytes(Self::write_records(&self.packet.answers)?)?;
+        self.write_bytes(Self::write_records(&self.packet.authorities)?)?;
+        self.write_bytes(Self::write_records(&self.packet.resources)?)?;
+
+        Ok(&self.buf)
+    }
+
+    fn write_header(&mut self) -> Result<()> {
         self.seek(0)?;
 
-        self.write_u16(header.id)?;
-        self.write_header_flags(header)?;
-        self.write_u16(header.question_count)?;
-        self.write_u16(header.answer_count)?;
-        self.write_u16(header.authority_count)?;
-        self.write_u16(header.answer_count)?;
+        self.write_u16(self.packet.header.id)?;
+
+        let flags = Self::write_header_flags(&self.packet.header);
+        self.write_byte(flags.0)?;
+        self.write_byte(flags.1)?;
+
+        self.write_u16(self.packet.header.question_count)?;
+        self.write_u16(self.packet.header.answer_count)?;
+        self.write_u16(self.packet.header.authority_count)?;
+        self.write_u16(self.packet.header.answer_count)?;
 
         Ok(())
     }
 
-    pub fn write_question(&mut self, question: &Question) -> Result<()> {
-        let mut pos = 12 + self.questions_len as usize;
-        let mut len = 0;
-
-        for byte in Self::write_domain(&question.domain)? {
-            self.buf.insert(pos, byte);
-            pos += 1;
-            len += 1;
+    fn write_questions(&mut self) -> Result<()> {
+        if self.offset > 12 {
+            self.seek(12)?;
         }
 
-        let (first, second) = u16_to_u8(question.qtype.to_num());
-        self.buf.insert(pos, first);
-        self.buf.insert(pos + 1, second);
-        pos += 2;
-        len += 2;
+        let mut buf: Vec<u8> = Vec::new();
+        for question in &self.packet.questions {
+            let domain = Self::write_domain(&question.domain)?;
+            for byte in domain {
+                buf.push(byte);
+            }
 
-        let (first, second) = u16_to_u8(question.class);
-        self.buf.insert(pos, first);
-        self.buf.insert(pos + 1, second);
-        pos += 2;
-        len += 2;
+            let pair = BytesPair::from(question.qtype.to_num());
+            buf.append(&mut pair.bytes());
 
-        self.questions_len = len;
+            let pair = BytesPair::from(question.qclass.to_num());
+            buf.append(&mut pair.bytes());
+
+            buf.push(0);
+        }
+
+        self.write_bytes(buf)?;
 
         Ok(())
+    }
+
+    fn write_records(records: &Vec<Record>) -> Result<Vec<u8>> {
+        let mut res = Vec::new();
+
+        for record in records {
+            match record.rtype {
+                DNSType::A => {
+                    let mut bytes = Self::write_domain(&record.domain)?;
+                    res.append(&mut bytes);
+
+                    res.append(&mut BytesPair::from(record.rtype.to_num()).bytes());
+                    res.append(&mut BytesPair::from(record.rclass.to_num()).bytes());
+
+                    res.append(&mut BytesUtil::from_u32(record.ttl).to_vec());
+                    res.append(&mut record.data.bytes());
+                },
+                _ => {
+                    warn!("other record types not supported yet!");
+                }
+            }
+        }
+
+        Ok(res)
     }
 
     fn write_domain(domain: &String) -> Result<Vec<u8>> {
@@ -83,23 +133,20 @@ impl PacketWriter {
         Ok(res)
     }
 
-    fn write_header_flags(&mut self, header: &Header) -> Result<()> {
-        let (mut first, mut second) = (0u8, 0u8);
+    fn write_header_flags(header: &Header) -> (u8, u8) {
+        let mut res = (0u8, 0u8);
 
-        first = bool_to_u8(header.recursion_desired)
-            | (bool_to_u8(header.truncation) << 1)
-            | (bool_to_u8(header.authoritive) << 2)
+        res.0 = header.recursion_desired as u8
+            | (header.truncation as u8) << 1
+            | (header.authoritive as u8) << 2
             | ((header.opcode & 0xF) << 3)
-            | (bool_to_u8(header.response) << 7);
+            | (header.response as u8) << 7;
 
-        second = header.code & 0xF
+        res.1 = header.code & 0xF
             | ((header.reserved & 0x7) << 4)
-            | bool_to_u8(header.recursion_available) << 7;
+            | (header.recursion_available as u8) << 7;
 
-        self.write(first)?;
-        self.write(second)?;
-
-        Ok(())
+        res
     }
 
     fn seek(&mut self, n: u16) -> Result<()> {
@@ -112,29 +159,40 @@ impl PacketWriter {
         Ok(())
     }
 
-    fn write(&mut self, value: u8) -> Result<()> {
+    fn write_byte(&mut self, value: u8) -> Result<()> {
         if self.offset >= 512 {
             bail!("End Of Buffer");
         }
 
-        self.buf[self.offset as usize] = value;
+        self.buf.insert(self.offset as usize, value);
         self.offset += 1;
 
         Ok(())
     }
 
+    fn write_bytes(&mut self, mut values: Vec<u8>) -> Result<()> {
+        if self.offset + values.len() as u16 > 512 {
+            bail!("End Of Buffer");
+        }
+
+        self.offset += values.len() as u16;
+        self.buf.append(values.as_mut());
+
+        Ok(())
+    }
+
     fn write_u16(&mut self, value: u16) -> Result<()> {
-        self.write(((value >> 8) & 0xFF) as u8)?;
-        self.write((value & 0xFF) as u8)?;
+        self.write_byte(((value >> 8) & 0xFF) as u8)?;
+        self.write_byte((value & 0xFF) as u8)?;
 
         Ok(())
     }
 
     fn write_u32(&mut self, value: u32) -> Result<()> {
-        self.write(((value >> 24) & 0xFF) as u8)?;
-        self.write(((value >> 16) & 0xFF) as u8)?;
-        self.write(((value >> 8) & 0xFF) as u8)?;
-        self.write((value & 0xFF) as u8)?;
+        self.write_byte(((value >> 24) & 0xFF) as u8)?;
+        self.write_byte(((value >> 16) & 0xFF) as u8)?;
+        self.write_byte(((value >> 8) & 0xFF) as u8)?;
+        self.write_byte((value & 0xFF) as u8)?;
 
         Ok(())
     }

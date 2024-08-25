@@ -1,19 +1,23 @@
 mod packet;
 mod header;
 mod result_code;
-mod util;
 mod question;
-mod query_type;
+mod dns_type;
 mod record;
 mod parser;
 mod writer;
+mod bytes_util;
+mod pair;
+mod record_data;
+mod dns_class;
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
-use crate::packet::Packet;
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use crate::parser::PacketParser;
 use clap::{Parser};
 use tracing::{info, error, Level};
 use tracing_subscriber::FmtSubscriber;
+use crate::packet::Packet;
+use crate::writer::PacketWriter;
 
 #[derive(Parser, Debug)]
 #[command(about)]
@@ -42,7 +46,7 @@ fn main() {
 
     loop {
         match udp_socket.recv_from(&mut buf) {
-            Ok((size, source)) => {
+            Ok((_size, source)) => {
                 let mut parser = PacketParser::new(&buf);
                 let packet = match parser.parse() {
                     Ok(packet) => packet,
@@ -53,23 +57,10 @@ fn main() {
                     },
                 };
 
-                info!("got a packet");
-                info!("header: {:?}", packet.header);
-
-                for rec in packet.answers {
-                    info!("answer record: {:?}", rec);
-                }
-
-                for rec in packet.authorities {
-                    info!("authorities record: {:?}", rec);
-                }
-
-                for rec in packet.resources {
-                    info!("resources record: {:?}", rec);
-                }
+                let res_packet = Packet::from(packet);
 
                 udp_socket
-                    .send_to(&parser.bytes(), source)
+                    .send_to(PacketWriter::from(res_packet).write().unwrap(), source)
                     .expect("Failed to send response");
             }
             Err(e) => {

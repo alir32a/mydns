@@ -1,22 +1,18 @@
 use anyhow::Result;
 use std::net::Ipv4Addr;
+use crate::dns_class::DNSClass;
 use crate::parser::PacketParser;
-use crate::query_type::QueryType;
+use crate::dns_type::DNSType;
+use crate::record_data::RecordData;
 
 #[derive(Debug)]
-pub enum Record {
-    A {
-        domain: String,
-        addr: Ipv4Addr,
-        ttl: u32,
-    },
-    UNKNOWN {
-        domain: String,
-        qtype: u16,
-        qclass: u16,
-        ttl: u32,
-        len: u16,
-    }
+pub struct Record {
+    pub domain: String,
+    pub rtype: DNSType,
+    pub rclass: DNSClass,
+    pub ttl: u32,
+    pub len: u16,
+    pub data: RecordData,
 }
 
 impl Record {
@@ -24,35 +20,36 @@ impl Record {
         // reading name which we are getting from the argument, so we don't need it.
         let _ = parser.next_u16()?;
 
-        let qtype = QueryType::from_num(parser.next_u16()?);
-        let qclass = parser.next_u16()?;
+        let rtype = DNSType::from(parser.next_u16()?);
+        let rclass = DNSClass::from(parser.next_u16()?);
         let ttl = parser.next_u32()?;
         let len = parser.next_u16()?;
 
-        match qtype {
-            QueryType::A => {
+        let mut record = Record {
+            domain: domain.clone(),
+            rtype,
+            rclass,
+            ttl,
+            len,
+            data: RecordData::UNKNOWN(len),
+        };
+
+        match record.rtype {
+            DNSType::A => {
                 let raw_addr = parser.next_u32()?;
-                let addr = Ipv4Addr::new(
-                    ((raw_addr >> 24) & 0xFF) as u8,
-                    ((raw_addr >> 16) & 0xFF) as u8,
-                    ((raw_addr >> 8) & 0xFF) as u8,
-                    ((raw_addr >> 0) & 0xFF) as u8,
+                record.data = RecordData::A(
+                    Ipv4Addr::new(
+                        ((raw_addr >> 24) & 0xFF) as u8,
+                        ((raw_addr >> 16) & 0xFF) as u8,
+                        ((raw_addr >> 8) & 0xFF) as u8,
+                        ((raw_addr >> 0) & 0xFF) as u8,
+                    )
                 );
 
-                Ok(Record::A {
-                    domain: domain.clone(),
-                    addr,
-                    ttl,
-                })
+                Ok(record)
             },
-            QueryType::UNKNOWN(_) => {
-                Ok(Record::UNKNOWN {
-                    domain: domain.clone(),
-                    qtype: qtype.to_num(),
-                    qclass,
-                    ttl,
-                    len,
-                })
+            _ => {
+                Ok(record)
             }
         }
     }

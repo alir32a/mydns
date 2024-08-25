@@ -1,18 +1,19 @@
-use crate::query_type::QueryType;
-use crate::util::{u16_to_u8};
+use crate::dns_class::DNSClass;
+use crate::pair::BytesPair;
+use crate::dns_type::DNSType;
 
 pub struct Question {
     pub domain: String,
-    pub qtype: QueryType,
-    pub class: u16
+    pub qtype: DNSType,
+    pub qclass: DNSClass
 }
 
 impl Question {
-    pub fn new(name: String, qtype: QueryType, qclass: u16) -> Question {
+    pub fn new(name: String, qtype: DNSType, qclass: DNSClass) -> Question {
         Question {
             domain: name,
             qtype,
-            class: qclass,
+            qclass,
         }
     }
 
@@ -28,11 +29,11 @@ impl Question {
         }
         res.push(0x0);
 
-        let qtype = u16_to_u8(self.qtype.to_num());
-        res.append(&mut vec![qtype.0, qtype.1]);
+        let qtype = BytesPair::from(self.qtype.to_num());
+        res.append(&mut qtype.bytes());
 
-        let class = u16_to_u8(self.class);
-        res.append(&mut vec![class.0, class.1]);
+        let class = BytesPair::from(self.qclass.to_num());
+        res.append(&mut class.bytes());
 
         res
     }

@@ -1,10 +1,11 @@
 use anyhow::{bail, Result};
+use crate::dns_class::DNSClass;
 use crate::header::Header;
 use crate::packet::Packet;
-use crate::query_type::QueryType;
+use crate::pair::BytesPair;
+use crate::dns_type::DNSType;
 use crate::question::Question;
 use crate::record::Record;
-use crate::util::u16_to_u8;
 
 pub struct PacketParser {
     buf: Vec<u8>,
@@ -35,7 +36,7 @@ impl PacketParser {
 
     pub fn next(&mut self) -> Result<u8> {
         if self.offset >= 512 {
-            return bail!("End Of Buffer");
+            bail!("End Of Buffer");
         }
 
         let res = self.buf[self.offset as usize];
@@ -134,17 +135,17 @@ impl PacketParser {
     }
 
     pub fn parse_header_flags(&mut self, header: &mut Header) -> Result<()> {
-        let (first, second) = u16_to_u8(self.next_u16()?);
+        let pair = BytesPair::from(self.next_u16()?);
 
-        header.response = (first & (1 << 7)) == 1;
-        header.opcode = (first >> 3) & 0xF;
-        header.authoritive = (first & (1 << 2)) == 1;
-        header.truncation = (first & (1 << 1)) == 1;
-        header.recursion_desired = (first & (1 << 0)) == 1;
+        header.response = (pair.0 & (1 << 7)) == 1;
+        header.opcode = (pair.0 >> 3) & 0xF;
+        header.authoritive = (pair.0 & (1 << 2)) == 1;
+        header.truncation = (pair.0 & (1 << 1)) == 1;
+        header.recursion_desired = (pair.0 & (1 << 0)) == 1;
 
-        header.recursion_available = (second & (1 << 7)) == 1;
-        header.reserved = (second >> 4) & 0x7;
-        header.code = second & 0xF;
+        header.recursion_available = (pair.1 & (1 << 7)) == 1;
+        header.reserved = (pair.1 >> 4) & 0x7;
+        header.code = pair.1 & 0xF;
 
         Ok(())
     }
@@ -154,7 +155,7 @@ impl PacketParser {
         let qtype = self.next_u16()?;
         let qclass = self.next_u16()?;
 
-        Ok(Question::new(name, QueryType::from_num(qtype), qclass))
+        Ok(Question::new(name, DNSType::from(qtype), DNSClass::from(qclass)))
     }
 
     pub fn parse_domain_name(&mut self) -> Result<String> {
@@ -199,7 +200,7 @@ impl PacketParser {
             }
         }
 
-        if total_jumps > 0 {
+        if total_jumps == 0 {
             self.seek(pos)?;
         }
 
