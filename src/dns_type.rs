@@ -17,6 +17,7 @@ pub enum DNSType {
     MINFO,
     MX,
     TXT,
+    AAAA, // 28
     // QTYPE
     AXFR, // 252
     MAILB,
@@ -43,6 +44,7 @@ impl DNSType {
             14 => DNSType::MINFO,
             15 => DNSType::MX,
             16 => DNSType::TXT,
+            28 => DNSType::AAAA,
             252 => DNSType::AXFR,
             253 => DNSType::MAILB,
             254 => DNSType::MAILA,
@@ -68,6 +70,7 @@ impl DNSType {
             DNSType::MINFO => 14,
             DNSType::MX => 15,
             DNSType::TXT => 16,
+            DNSType::AAAA => 28,
             DNSType::AXFR => 252,
             DNSType::MAILB => 253,
             DNSType::MAILA => 254,
