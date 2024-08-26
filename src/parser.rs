@@ -89,28 +89,16 @@ impl PacketParser {
             packet.questions.push(self.parse_question()?);
         }
 
-        for i in 0..packet.header.answer_count {
-            if i >= packet.questions.len() as u16 {
-                break;
-            }
-
-            packet.answers.push(Record::parse(self, &packet.questions[i as usize].domain)?);
+        for _ in 0..packet.header.answer_count {
+            packet.answers.push(Record::parse(self)?);
         }
 
-        for i in 0..packet.header.authority_count {
-            if i >= packet.questions.len() as u16 {
-                break;
-            }
-
-            packet.authorities.push(Record::parse(self, &packet.questions[i as usize].domain)?);
+        for _ in 0..packet.header.authority_count {
+            packet.authorities.push(Record::parse(self)?);
         }
 
-        for i in 0..packet.header.additional_count {
-            if i >= packet.questions.len() as u16 {
-                break;
-            }
-
-            packet.resources.push(Record::parse(self, &packet.questions[i as usize].domain)?);
+        for _ in 0..packet.header.resource_count {
+            packet.resources.push(Record::parse(self)?);
         }
 
         Ok(packet)
@@ -129,7 +117,7 @@ impl PacketParser {
         header.question_count = self.next_u16()?;
         header.answer_count = self.next_u16()?;
         header.authority_count = self.next_u16()?;
-        header.answer_count = self.next_u16()?;
+        header.resource_count = self.next_u16()?;
 
         Ok(header)
     }
@@ -161,19 +149,22 @@ impl PacketParser {
     pub fn parse_domain_name(&mut self) -> Result<String> {
         let mut res = String::new();
 
+        let mut pos = self.offset();
+
         let mut total_jumps = 0;
         let max_jumps = 5;
-        let mut pos = self.offset();
 
         loop {
             if total_jumps > max_jumps {
-                bail!("Max jumps reached while parsing a question");
+                bail!("Max jumps reached while parsing a domain");
             }
 
             let len = self.get(pos)?;
 
             if (len & 0xC0) == 0xC0 {
-                self.seek(pos + 2)?;
+                if total_jumps == 0 {
+                    self.seek(pos + 2)?;
+                }
 
                 let next_byte = self.get(pos + 1)? as u16;
                 let offset = (((len as u16) ^ 0xC0) << 8) | next_byte;

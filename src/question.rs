@@ -2,6 +2,7 @@ use crate::dns_class::DNSClass;
 use crate::pair::BytesPair;
 use crate::dns_type::DNSType;
 
+#[derive(Debug)]
 pub struct Question {
     pub domain: String,
     pub qtype: DNSType,

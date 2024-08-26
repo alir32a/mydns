@@ -77,4 +77,27 @@ impl<'s> DnsServer<'s> {
             }
         }
     }
+
+    fn log_response_packet(res: &[u8]) -> Result<()> {
+        let packet = PacketParser::new(res).parse()?;
+        info!("Parsed packet header: {:?}", packet.header);
+
+        for question in packet.questions {
+            info!("Parsed packet question: {:?}", question);
+        }
+
+        for answer in packet.answers {
+            info!("Parsed packet answer: {:?}", answer);
+        }
+
+        for authority in packet.authorities {
+            info!("Parsed packet authority: {:?}", authority);
+        }
+
+        for resource in packet.resources {
+            info!("Parsed packet resource: {:?}", resource);
+        }
+
+        Ok(())
+    }
 }
