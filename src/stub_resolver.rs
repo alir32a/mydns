@@ -1,7 +1,10 @@
-use std::io::BufReader;
 use std::net::UdpSocket;
 use anyhow::{Result};
-use rand::random;
+use rand::{Rng, thread_rng};
+use crate::packet::Packet;
+use crate::parser::PacketParser;
+use crate::result_code::ResultCode;
+use crate::writer::PacketWriter;
 
 pub struct StubResolver<'r> {
     pub forward: &'r str,
@@ -14,13 +17,34 @@ impl<'r> StubResolver<'r> {
         }
     }
 
-    pub fn resolve(&self, req: &[u8]) -> Result<Vec<u8>> {
-        let mut res = [0; 512];
+    pub fn resolve(&self, buf: &[u8]) -> Result<Vec<u8>> {
+        let mut req = PacketParser::new(buf).parse()?;
 
-        let socket = UdpSocket::bind(("0.0.0.0", random()))?;
-        socket.send_to(req, (self.forward, 53))?;
-        socket.recv_from(&mut res)?;
+        if req.questions.len() == 0 {
+            let mut res = Packet::from(req);
+            Self::set_resp_packet(&mut res);
+            res.header.code = ResultCode::FORMERR.to_u8();
 
-        Ok(res.to_vec())
+            return PacketWriter::from(res).write();
+        }
+
+        let socket = UdpSocket::bind(
+            ("0.0.0.0", thread_rng().gen_range(9999..u16::MAX))
+        )?;
+        socket.send_to(buf, (self.forward, 53))?;
+
+        let mut res_buf = [0; 512];
+        socket.recv_from(&mut res_buf)?;
+
+        let mut res = PacketParser::new(&res_buf).parse()?;
+        Self::set_resp_packet(&mut res);
+
+        PacketWriter::from(res).write()
+    }
+
+    fn set_resp_packet(res: &mut Packet) {
+        res.header.recursion_desired = true;
+        res.header.recursion_available = true;
+        res.header.response = true;
     }
 }

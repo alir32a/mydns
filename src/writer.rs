@@ -1,6 +1,7 @@
+use std::fs::File;
 use std::io::Write;
 use anyhow::{bail, Result};
-use tracing::warn;
+use tracing::{info, warn};
 use crate::bytes_util::BytesUtil;
 use crate::dns_class::DNSClass;
 use crate::header::Header;
@@ -34,7 +35,7 @@ impl PacketWriter {
         }
     }
 
-    pub fn write(&mut self) -> Result<&Vec<u8>> {
+    pub fn write(&mut self) -> Result<Vec<u8>> {
         // reset the buffer before any writes to the buf
         self.buf.clear();
 
@@ -44,7 +45,7 @@ impl PacketWriter {
         self.write_bytes(Self::write_records(&self.packet.authorities)?)?;
         self.write_bytes(Self::write_records(&self.packet.resources)?)?;
 
-        Ok(&self.buf)
+        Ok(self.buf.clone())
     }
 
     fn write_header(&mut self) -> Result<()> {
@@ -59,7 +60,7 @@ impl PacketWriter {
         self.write_u16(self.packet.header.question_count)?;
         self.write_u16(self.packet.header.answer_count)?;
         self.write_u16(self.packet.header.authority_count)?;
-        self.write_u16(self.packet.header.answer_count)?;
+        self.write_u16(self.packet.header.resource_count)?;
 
         Ok(())
     }
@@ -81,8 +82,6 @@ impl PacketWriter {
 
             let pair = BytesPair::from(question.qclass.to_num());
             buf.append(&mut pair.bytes());
-
-            buf.push(0);
         }
 
         self.write_bytes(buf)?;
@@ -103,10 +102,13 @@ impl PacketWriter {
                     res.append(&mut BytesPair::from(record.rclass.to_num()).bytes());
 
                     res.append(&mut BytesUtil::from_u32(record.ttl).to_vec());
-                    res.append(&mut record.data.bytes());
+
+                    let mut data = record.data.bytes();
+                    res.append(&mut BytesPair::from(data.len() as u16).bytes());
+                    res.append(&mut data);
                 },
                 _ => {
-                    warn!("other record types not supported yet!");
+                    warn!("{}", format!("{:?} record types not supported yet!", record.rtype));
                 }
             }
         }
@@ -128,7 +130,7 @@ impl PacketWriter {
             }
         }
 
-        res.push(0x00);
+        res.push(0);
 
         Ok(res)
     }
@@ -139,11 +141,11 @@ impl PacketWriter {
         res.0 = header.recursion_desired as u8
             | (header.truncation as u8) << 1
             | (header.authoritive as u8) << 2
-            | ((header.opcode & 0xF) << 3)
+            | ((header.opcode & 0x0F) << 3)
             | (header.response as u8) << 7;
 
-        res.1 = header.code & 0xF
-            | ((header.reserved & 0x7) << 4)
+        res.1 = header.code & 0x0F
+            | ((header.reserved & 0x07) << 4)
             | (header.recursion_available as u8) << 7;
 
         res

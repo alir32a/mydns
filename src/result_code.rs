@@ -9,14 +9,25 @@ pub enum ResultCode {
 }
 
 impl ResultCode {
-    pub fn from_num(num: u8) -> ResultCode {
-        match num {
+    pub fn from(value: u8) -> ResultCode {
+        match value {
             1 => ResultCode::FORMERR,
             2 => ResultCode::SERVFAIL,
             3 => ResultCode::NXDOMAIN,
             4 => ResultCode::NOTIMP,
             5 => ResultCode::REFUSED,
             0 | _ => ResultCode::NOERROR,
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            ResultCode::NOERROR => 0,
+            ResultCode::FORMERR => 1,
+            ResultCode::SERVFAIL => 2,
+            ResultCode::NXDOMAIN => 3,
+            ResultCode::NOTIMP => 4,
+            ResultCode::REFUSED => 5,
         }
     }
 }

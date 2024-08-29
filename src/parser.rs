@@ -126,14 +126,14 @@ impl PacketParser {
         let pair = BytesPair::from(self.next_u16()?);
 
         header.response = (pair.0 & (1 << 7)) == 1;
-        header.opcode = (pair.0 >> 3) & 0xF;
+        header.opcode = (pair.0 >> 3) & 0x0F;
         header.authoritive = (pair.0 & (1 << 2)) == 1;
         header.truncation = (pair.0 & (1 << 1)) == 1;
         header.recursion_desired = (pair.0 & (1 << 0)) == 1;
 
         header.recursion_available = (pair.1 & (1 << 7)) == 1;
-        header.reserved = (pair.1 >> 4) & 0x7;
-        header.code = pair.1 & 0xF;
+        header.reserved = (pair.1 >> 4) & 0x07;
+        header.code = pair.1 & 0x0F;
 
         Ok(())
     }

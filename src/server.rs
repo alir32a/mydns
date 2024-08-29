@@ -68,7 +68,7 @@ impl<'s> DnsServer<'s> {
                     let res_packet = Packet::from(packet);
 
                     udp_socket
-                        .send_to(PacketWriter::from(res_packet).write().unwrap(), source)
+                        .send_to(&PacketWriter::from(res_packet).write().unwrap(), source)
                         .expect("Failed to send response");
                 }
                 Err(e) => {
