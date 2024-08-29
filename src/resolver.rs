@@ -6,12 +6,12 @@ use crate::parser::PacketParser;
 use crate::result_code::ResultCode;
 use crate::writer::PacketWriter;
 
-pub struct StubResolver<'r> {
+pub struct Resolver<'r> {
     pub forward: &'r str,
 }
 
-impl<'r> StubResolver<'r> {
-    pub fn new(forward: &'r str) -> StubResolver {
+impl<'r> Resolver<'r> {
+    pub fn new(forward: &'r str) -> Resolver {
         Self {
             forward,
         }

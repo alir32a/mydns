@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use tracing::{error, info};
 use crate::packet::Packet;
 use crate::parser::PacketParser;
-use crate::stub_resolver::StubResolver;
+use crate::resolver::Resolver;
 use crate::writer::PacketWriter;
 
 pub struct DnsServer<'s> {
@@ -30,10 +30,10 @@ impl<'s> DnsServer<'s> {
         };
         info!("Listening on 0.0.0.0:{}", self.port);
         let mut buf = [0; 512];
-        let mut resolver: Option<StubResolver> = None;
+        let mut resolver: Option<Resolver> = None;
 
         if !self.forward.is_empty() {
-            resolver = Some(StubResolver::new(self.forward));
+            resolver = Some(Resolver::new(self.forward));
         }
 
         loop {

@@ -1,14 +1,8 @@
-use std::fs::File;
-use std::io::Write;
 use anyhow::{bail, Result};
-use tracing::{info, warn};
 use crate::bytes_util::BytesUtil;
-use crate::dns_class::DNSClass;
 use crate::header::Header;
 use crate::packet::Packet;
 use crate::pair::BytesPair;
-use crate::dns_type::DNSType;
-use crate::question::Question;
 use crate::record::Record;
 
 #[derive(Default)]
@@ -93,24 +87,17 @@ impl PacketWriter {
         let mut res = Vec::new();
 
         for record in records {
-            match record.rtype {
-                DNSType::A => {
-                    let mut bytes = Self::write_domain(&record.domain)?;
-                    res.append(&mut bytes);
+            let mut bytes = Self::write_domain(&record.domain)?;
+            res.append(&mut bytes);
 
-                    res.append(&mut BytesPair::from(record.rtype.to_num()).bytes());
-                    res.append(&mut BytesPair::from(record.rclass.to_num()).bytes());
+            res.append(&mut BytesPair::from(record.rtype.to_num()).bytes());
+            res.append(&mut BytesPair::from(record.rclass.to_num()).bytes());
 
-                    res.append(&mut BytesUtil::from_u32(record.ttl).to_vec());
+            res.append(&mut BytesUtil::from_u32(record.ttl).to_vec());
 
-                    let mut data = record.data.bytes();
-                    res.append(&mut BytesPair::from(data.len() as u16).bytes());
-                    res.append(&mut data);
-                },
-                _ => {
-                    warn!("{}", format!("{:?} record types not supported yet!", record.rtype));
-                }
-            }
+            let mut data = record.data.bytes();
+            res.append(&mut BytesPair::from(data.len() as u16).bytes());
+            res.append(&mut data);
         }
 
         Ok(res)
@@ -130,7 +117,7 @@ impl PacketWriter {
             }
         }
 
-        res.push(0);
+        res.push(0x00);
 
         Ok(res)
     }

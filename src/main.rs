@@ -11,7 +11,7 @@ mod pair;
 mod record_data;
 mod dns_class;
 mod server;
-mod stub_resolver;
+mod resolver;
 
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use crate::parser::PacketParser;
