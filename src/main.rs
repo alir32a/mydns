@@ -8,7 +8,6 @@ mod parser;
 mod writer;
 mod bytes_util;
 mod pair;
-mod record_data;
 mod dns_class;
 mod server;
 mod resolver;

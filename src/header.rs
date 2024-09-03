@@ -1,5 +1,5 @@
 
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Header {
     pub id: u16,
     pub response: bool,

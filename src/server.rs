@@ -20,7 +20,7 @@ impl<'s> DnsServer<'s> {
     }
 
     pub fn start(&self) -> Result<()> {
-        let udp_socket = match UdpSocket::bind(SocketAddr::new(IpAddr::from([0,0,0,0]), self.port)) {
+        let udp_socket = match UdpSocket::bind(("0.0.0.0", self.port)) {
             Ok(socket) => socket,
             Err(err) => {
                 error!("Failed to start server: {}", err);
@@ -65,7 +65,7 @@ impl<'s> DnsServer<'s> {
                         },
                     };
 
-                    let res_packet = Packet::from(packet);
+                    let res_packet = Packet::from(&packet);
 
                     udp_socket
                         .send_to(&PacketWriter::from(res_packet).write().unwrap(), source)

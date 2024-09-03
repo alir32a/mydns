@@ -17,4 +17,12 @@ impl Packet {
             ..Default::default()
         }
     }
+
+    pub fn from(packet: &Packet) -> Packet {
+        Packet {
+            header: packet.header.clone(),
+            questions: packet.questions.clone(),
+            ..Default::default()
+        }
+    }
 }

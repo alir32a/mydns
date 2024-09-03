@@ -95,7 +95,7 @@ impl PacketWriter {
 
             res.append(&mut BytesUtil::from_u32(record.ttl).to_vec());
 
-            let mut data = record.data.bytes();
+            let mut data = record.data.bytes()?;
             res.append(&mut BytesPair::from(data.len() as u16).bytes());
             res.append(&mut data);
         }
@@ -103,7 +103,7 @@ impl PacketWriter {
         Ok(res)
     }
 
-    fn write_domain(domain: &String) -> Result<Vec<u8>> {
+    pub fn write_domain(domain: &String) -> Result<Vec<u8>> {
         let mut res = Vec::new();
 
         for label in domain.split('.') {
