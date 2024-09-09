@@ -1,27 +1,26 @@
-use std::net::UdpSocket;
-use std::ops::Deref;
 use anyhow::{Result};
-use rand::{random, Rng, thread_rng};
+use rand::{Rng, thread_rng};
 use rand::rngs::ThreadRng;
+use crate::handler::Handler;
 use crate::packet::Packet;
 use crate::parser::PacketParser;
 use crate::question::Question;
 use crate::result_code::ResultCode;
 use crate::writer::PacketWriter;
 
-pub struct Resolver<'r> {
-    pub forward: &'r str,
+pub struct Resolver {
+    pub handler: Box<dyn Handler>,
 }
 
-impl<'r> Resolver<'r> {
-    pub fn new(forward: &'r str) -> Resolver {
+impl Resolver {
+    pub fn new(handler: impl Handler + 'static) -> Resolver {
         Self {
-            forward,
+            handler: Box::new(handler)
         }
     }
 
-    pub fn resolve(&self, buf: &[u8]) -> Result<Vec<u8>> {
-        let mut req = PacketParser::new(buf).parse()?;
+    pub fn resolve(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
+        let req = PacketParser::new(buf).parse()?;
         let mut res = Packet::from(&req);
         Self::set_resp_packet(&mut res);
 
@@ -47,20 +46,14 @@ impl<'r> Resolver<'r> {
         PacketWriter::from(res).write()
     }
 
-    pub fn lookup(&self, question: Question, rng: &mut ThreadRng) -> Result<Packet> {
+    pub fn lookup(&mut self, question: Question, rng: &mut ThreadRng) -> Result<Packet> {
         let req = Self::new_query_packet(question, rng);
 
         let req_bin = PacketWriter::from(req).write()?;
 
-        let socket = UdpSocket::bind(
-            ("0.0.0.0", rng.gen_range(9999..u16::MAX))
-        )?;
-        socket.send_to(req_bin.as_slice(), (self.forward, 53))?;
+        let res = self.handler.send(req_bin.as_slice())?;
 
-        let mut res_buf = [0; 512];
-        socket.recv_from(&mut res_buf)?;
-
-        let mut res = PacketParser::new(&res_buf).parse()?;
+        let mut res = PacketParser::new(&res).parse()?;
         Self::set_resp_packet(&mut res);
 
         Ok(res)

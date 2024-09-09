@@ -1,3 +1,6 @@
+use rand::random;
+use crate::dns_class::DNSClass;
+use crate::dns_type::DNSType;
 use crate::header::Header;
 use crate::question::Question;
 use crate::record::Record;
@@ -22,6 +25,19 @@ impl Packet {
         Packet {
             header: packet.header.clone(),
             questions: packet.questions.clone(),
+            ..Default::default()
+        }
+    }
+
+    pub fn get_empty_packet() -> Packet {
+        Self {
+            header: Header {
+                id: random(),
+                recursion_desired: true,
+                question_count: 1,
+                ..Default::default()
+            },
+            questions: vec![Question::new(".".to_string(), DNSType::A, DNSClass::IN)],
             ..Default::default()
         }
     }
