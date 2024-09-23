@@ -21,11 +21,11 @@ impl PacketParser {
     }
 
     pub fn bytes(&self) -> &[u8] {
-        return self.buf.as_slice();
+        self.buf.as_slice()
     }
 
     pub fn offset(&self) -> u16 {
-        return self.offset;
+        self.offset
     }
 
     pub fn seek(&mut self, n: u16) -> Result<()> {
@@ -143,7 +143,7 @@ impl PacketParser {
         let qtype = self.next_u16()?;
         let qclass = self.next_u16()?;
 
-        Ok(Question::new(name, DNSType::from(qtype), DNSClass::from(qclass)))
+        Ok(Question::new_with_class(name, DNSType::from(qtype), DNSClass::from(qclass)))
     }
 
     pub fn parse_domain_name(&mut self) -> Result<String> {

@@ -55,17 +55,17 @@ impl Record {
                 Ok(record)
             },
             DNSType::CNAME => {
-                record.data = RecordData::NS(parser.parse_domain_name()?);
+                record.data = RecordData::CNAME(parser.parse_domain_name()?);
 
                 Ok(record)
             },
             DNSType::PTR => {
-                record.data = RecordData::NS(parser.parse_domain_name()?);
+                record.data = RecordData::PTR(parser.parse_domain_name()?);
 
                 Ok(record)
             },
             DNSType::TXT => {
-                record.data = RecordData::NS(parser.parse_domain_name()?);
+                record.data = RecordData::TXT(parser.parse_domain_name()?);
 
                 Ok(record)
             },

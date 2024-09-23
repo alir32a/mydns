@@ -2,7 +2,7 @@ use crate::dns_class::DNSClass;
 use crate::pair::BytesPair;
 use crate::dns_type::DNSType;
 
-#[derive(Clone, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct Question {
     pub domain: String,
     pub qtype: DNSType,
@@ -10,11 +10,19 @@ pub struct Question {
 }
 
 impl Question {
-    pub fn new(name: String, qtype: DNSType, qclass: DNSClass) -> Question {
+    pub fn new(name: String, qtype: DNSType) -> Question {
         Question {
             domain: name,
             qtype,
-            qclass,
+            ..Default::default()
+        }
+    }
+
+    pub fn new_with_class(name: String, qtype: DNSType, qclass: DNSClass) -> Question {
+        Question {
+            domain: name,
+            qtype,
+            qclass
         }
     }
 
@@ -28,7 +36,7 @@ impl Question {
 
             res.append(&mut value.as_bytes().to_vec());
         }
-        res.push(0x0);
+        res.push(0x00);
 
         let qtype = BytesPair::from(self.qtype.to_num());
         res.append(&mut qtype.bytes());

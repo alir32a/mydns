@@ -1,20 +1,12 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs};
-use std::str::FromStr;
-use crate::handler::HandlerTarget;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
 pub struct RootServer(&'static str, Ipv4Addr, Ipv6Addr);
 
 impl RootServer {
-    pub fn to_handle_target(&self) -> (HandlerTarget, HandlerTarget) {
+    pub fn to_socket_addrs(&self) -> (SocketAddr, SocketAddr) {
         (
-            HandlerTarget {
-                addr: IpAddr::V4(self.1),
-                port: 53
-            },
-            HandlerTarget {
-                addr: IpAddr::V6(self.2),
-                port: 53
-            }
+            SocketAddr::new(IpAddr::V4(self.1), 53),
+            SocketAddr::new(IpAddr::V6(self.2), 53),
         )
     }
 }
@@ -87,10 +79,10 @@ pub static ROOT_SERVERS: [RootServer; 13] = [
     ),
 ];
 
-pub fn get_root_servers_handle_targets(use_v6: bool) -> Vec<HandlerTarget> {
+pub fn get_root_servers_handle_targets(use_v6: bool) -> Vec<SocketAddr> {
     let mut res = Vec::new();
     for server in &ROOT_SERVERS {
-        let (v4, v6) = server.to_handle_target();
+        let (v4, v6) = server.to_socket_addrs();
         res.push(v4);
 
         if use_v6 {

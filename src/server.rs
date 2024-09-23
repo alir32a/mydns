@@ -1,13 +1,8 @@
-use std::net::{IpAddr, UdpSocket};
-use std::str::FromStr;
+use std::net::{SocketAddr, UdpSocket};
 use anyhow::{Result};
 use tracing::{error, info};
-use crate::handler::{Handler, HandlerTarget, UdpHandler};
-use crate::packet::Packet;
 use crate::parser::PacketParser;
-use crate::resolver::Resolver;
-use crate::root::{get_root_servers_handle_targets, ROOT_SERVERS};
-use crate::writer::PacketWriter;
+use crate::resolver::{ForwardResolver, RecursiveResolver, Resolver};
 
 pub trait DnsServer {
     fn start(&self) -> Result<()>;
@@ -25,29 +20,6 @@ impl UdpDnsServer {
             forward
         }
     }
-
-    fn log_response_packet(res: &[u8]) -> Result<()> {
-        let packet = PacketParser::new(res).parse()?;
-        info!("Parsed packet header: {:?}", packet.header);
-
-        for question in packet.questions {
-            info!("Parsed packet question: {:?}", question);
-        }
-
-        for answer in packet.answers {
-            info!("Parsed packet answer: {:?}", answer);
-        }
-
-        for authority in packet.authorities {
-            info!("Parsed packet authority: {:?}", authority);
-        }
-
-        for resource in packet.resources {
-            info!("Parsed packet resource: {:?}", resource);
-        }
-
-        Ok(())
-    }
 }
 
 impl DnsServer for UdpDnsServer {
@@ -63,17 +35,15 @@ impl DnsServer for UdpDnsServer {
         info!("Listening on 0.0.0.0:{}", self.port);
 
         let mut buf = [0; 512];
-        let mut resolver = Resolver::new(
-            UdpHandler::new(get_root_servers_handle_targets(false))
-        );
+        let mut resolver: Box<dyn Resolver> = Box::new(RecursiveResolver::new());
 
         if let Some(forwards) = &self.forward {
             let mut targets = Vec::new();
             for target in forwards {
-                targets.push(HandlerTarget::new(IpAddr::from_str(target.as_str())?, 53))
+                targets.push(SocketAddr::new(target.parse()?, 53))
             }
 
-            resolver = Resolver::new(UdpHandler::new(targets));
+            resolver = Box::new(ForwardResolver::new(targets));
         }
 
         loop {

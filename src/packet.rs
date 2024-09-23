@@ -1,5 +1,4 @@
 use rand::random;
-use crate::dns_class::DNSClass;
 use crate::dns_type::DNSType;
 use crate::header::Header;
 use crate::question::Question;
@@ -37,7 +36,7 @@ impl Packet {
                 question_count: 1,
                 ..Default::default()
             },
-            questions: vec![Question::new(".".to_string(), DNSType::A, DNSClass::IN)],
+            questions: vec![Question::new(".".to_string(), DNSType::A)],
             ..Default::default()
         }
     }

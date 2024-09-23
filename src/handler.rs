@@ -1,7 +1,5 @@
-use std::cell::RefCell;
 use std::io::{Error, ErrorKind};
-use std::net::{AddrParseError, IpAddr, ToSocketAddrs, UdpSocket};
-use std::str::FromStr;
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::{Arc, RwLock};
 use rand::{thread_rng, Rng};
 use anyhow::{bail, Result};
@@ -20,58 +18,51 @@ use crate::writer::PacketWriter;
 
 pub trait Handler {
     fn send(&mut self, buf: &[u8]) -> Result<Vec<u8>>;
-}
-
-#[derive(Clone)]
-pub struct HandlerTarget {
-    pub addr: IpAddr,
-    pub port: u16,
-}
-
-impl HandlerTarget {
-    pub fn new(addr: IpAddr, port: u16) -> Self {
-        Self {
-            addr,
-            port
-        }
-    }
+    fn send_to(&mut self, buf: &[u8], addrs: &[SocketAddr]) -> Result<Vec<u8>>;
 }
 
 struct Zero;
 
 pub struct UdpHandler {
+    socket: Arc<UdpSocket>,
+    targets: Arc<Vec<SocketAddr>>,
     failures: Arc<RwLock<Vec<usize>>>,
-    targets: Arc<Vec<HandlerTarget>>,
-    shutdown_fn: Arc<mpsc::Sender<Zero>>
+    shutdown_fn: Arc<mpsc::Sender<Zero>>,
 }
 
 impl UdpHandler {
-    pub fn new(addrs: Vec<HandlerTarget>) -> Self {
+    pub fn try_new(addrs: Vec<SocketAddr>, timeout: Duration) -> Result<Self> {
+        let socket = UdpSocket::bind(
+            ("0.0.0.0", thread_rng().gen_range(9999..u16::MAX))
+        )?;
+        socket.set_read_timeout(Some(timeout))?;
+        socket.set_write_timeout(Some(timeout))?;
+
         let (tx, rx) = mpsc::channel(1);
 
         let mut handler = Self {
-            failures: Arc::new(RwLock::new(Vec::new())),
+            socket: Arc::new(socket),
             targets: Arc::new(Vec::from(addrs)),
+            failures: Arc::new(RwLock::new(Vec::new())),
             shutdown_fn: Arc::new(tx)
         };
 
         handler.run_failures_job(rx);
+        
+        Ok(handler)
+    }
 
-        handler
+    pub fn new(addrs: Vec<SocketAddr>, timeout: Duration) -> Self {
+        Self::try_new(addrs, timeout).unwrap()
     }
 
     fn run_failures_job(&mut self, mut shutdown: mpsc::Receiver<Zero>) {
         let failures = self.failures.clone();
         let queue = self.targets.clone();
+        let socket = self.socket.clone();
 
          tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
-
-            let socket = UdpSocket::bind(
-                ("0.0.0.0", thread_rng().gen_range(9999..u16::MAX))
-            ).unwrap();
-            socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-            socket.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
 
             loop {
                 select! {
@@ -82,10 +73,10 @@ impl UdpHandler {
                             let buf = PacketWriter::from(Packet::get_empty_packet()).write().unwrap();
                             let target = queue[idx].clone();
 
-                            match socket.send_to(buf.as_slice(), (target.addr, target.port)) {
+                            match socket.send_to(buf.as_slice(), target) {
                                 Ok(n) => {
                                     if n == 0 {
-                                        error!("Unable to send UDP message to {}:{}", target.addr, target.port);
+                                        error!("Unable to send UDP message to {}", target.to_string());
 
                                         continue;
                                     }
@@ -93,14 +84,17 @@ impl UdpHandler {
                                     let mut buf = [0u8; 512];
                                     match socket.recv(&mut buf) {
                                         Ok(n) => {
-                                            failures.write().unwrap().remove(i);
+                                            if let Some(n) = failures.read().unwrap().iter().find(|index| {
+                                                **index == idx
+                                            }) {
+                                                failures.write().unwrap().remove(*n);   
+                                            }
                                         },
                                         Err(e) => {
                                             error!(
                                                 "Got an error while receiving UDP message to \
-                                                {}:{} => {}",
-                                                target.addr,
-                                                target.port,
+                                                {} => {}",
+                                                target.to_string(),
                                                 e.to_string(),
                                             );
                                         }
@@ -108,9 +102,8 @@ impl UdpHandler {
                                 },
                                 Err(e) => {
                                     error!(
-                                        "Got an error while sending UDP message to {}:{} => {}",
-                                        target.addr,
-                                        target.port,
+                                        "Got an error while sending UDP message to {} => {}",
+                                        target.to_string(),
                                         e.to_string(),
                                     );
                                 }
@@ -129,25 +122,21 @@ impl UdpHandler {
 impl Handler for UdpHandler {
     fn send(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
         let mut res = [0u8; 512];
+        let mut timed_outs = Vec::with_capacity(self.targets.len());
         let mut sent = false;
 
         for (i, target) in self.targets.iter().enumerate() {
-            if self.failures.read().unwrap().len() == self.targets.len() {
+            if self.failures.read().expect("failures lock may be poisoned").len() == self.targets.len() {
                 bail!("all of the resolve targets are unavailable")
             }
 
-            if self.failures.read().unwrap().contains(&i) {
+            if self.failures.read().expect("failures lock may be poisoned").contains(&i) {
                 continue;
             }
 
-            let socket = UdpSocket::bind(
-                ("0.0.0.0", thread_rng().gen_range(9999..u16::MAX))
-            )?;
-            socket.set_write_timeout(Some(Duration::from_secs(5)))?;
-            socket.set_read_timeout(Some(Duration::from_secs(5)))?;
-            if let Err(e) = socket.send_to(buf, (target.addr, target.port)) {
+            if let Err(e) = self.socket.send_to(buf, target) {
                 if is_timeout(&e) {
-                    self.failures.write().unwrap().push(i);
+                    timed_outs.push(i);
 
                     continue;
                 }
@@ -155,9 +144,9 @@ impl Handler for UdpHandler {
                 bail!(e);
             }
 
-            if let Err(e) = socket.recv_from(&mut res) {
+            if let Err(e) = self.socket.recv_from(&mut res) {
                 if is_timeout(&e) {
-                    self.failures.write().unwrap().push(i);
+                    timed_outs.push(i);
 
                     continue;
                 }
@@ -169,17 +158,57 @@ impl Handler for UdpHandler {
             break;
         }
 
+        self.failures.write().expect("failures lock may be poisoned").append(&mut timed_outs);
+
         if !sent {
             bail!("Couldn't send request to any of the given addresses")
         }
 
         Ok(res.to_vec())
     }
+
+    fn send_to(&mut self, buf: &[u8], addrs: &[SocketAddr]) -> Result<Vec<u8>> {
+        let mut res = vec![0; 512];
+        let mut sent = false;
+        
+        for addr in addrs {
+            if let Err(e) = self.socket.send_to(buf, addr) {
+                if is_timeout(&e) {
+                    continue;
+                }
+
+                bail!(e);
+            }
+
+            if let Err(e) = self.socket.recv_from(&mut res) {
+                if is_timeout(&e) {
+                    continue;
+                }
+
+                bail!(e);
+            }
+            
+            if res.is_empty() {
+                bail!("Got empty response from {}", addr.to_string());
+            }
+            
+            sent = true;
+            break;
+        }
+
+        if !sent {
+            bail!("Couldn't send request to any of the given addresses")
+        }
+        
+        Ok(res)
+    }
 }
 
 impl Drop for UdpHandler {
     fn drop(&mut self) {
-
+        self.shutdown_fn.try_send(Zero).unwrap_or_else(|err| {
+            error!("Couldn't shutdown one of the handlers task: {}", err);
+        })
     }
 }
 
