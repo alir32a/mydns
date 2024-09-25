@@ -24,6 +24,7 @@ pub trait Handler {
 struct Zero;
 
 pub struct UdpHandler {
+    use_ipv6: bool,
     socket: Arc<UdpSocket>,
     targets: Arc<Vec<SocketAddr>>,
     failures: Arc<RwLock<Vec<usize>>>,
@@ -31,7 +32,7 @@ pub struct UdpHandler {
 }
 
 impl UdpHandler {
-    pub fn try_new(addrs: Vec<SocketAddr>, timeout: Duration) -> Result<Self> {
+    pub fn try_new(addrs: Vec<SocketAddr>, timeout: Duration, use_ipv6: bool) -> Result<Self> {
         let socket = UdpSocket::bind(
             ("0.0.0.0", thread_rng().gen_range(9999..u16::MAX))
         )?;
@@ -41,6 +42,7 @@ impl UdpHandler {
         let (tx, rx) = mpsc::channel(1);
 
         let mut handler = Self {
+            use_ipv6,
             socket: Arc::new(socket),
             targets: Arc::new(Vec::from(addrs)),
             failures: Arc::new(RwLock::new(Vec::new())),
@@ -52,8 +54,8 @@ impl UdpHandler {
         Ok(handler)
     }
 
-    pub fn new(addrs: Vec<SocketAddr>, timeout: Duration) -> Self {
-        Self::try_new(addrs, timeout).unwrap()
+    pub fn new(addrs: Vec<SocketAddr>, timeout: Duration, use_ipv6: bool) -> Self {
+        Self::try_new(addrs, timeout, use_ipv6).unwrap()
     }
 
     fn run_failures_job(&mut self, mut shutdown: mpsc::Receiver<Zero>) {
@@ -126,6 +128,10 @@ impl Handler for UdpHandler {
         let mut sent = false;
 
         for (i, target) in self.targets.iter().enumerate() {
+            if target.is_ipv6() && !self.use_ipv6 {
+                continue    
+            }
+            
             if self.failures.read().expect("failures lock may be poisoned").len() == self.targets.len() {
                 bail!("all of the resolve targets are unavailable")
             }
@@ -172,6 +178,10 @@ impl Handler for UdpHandler {
         let mut sent = false;
         
         for addr in addrs {
+            if addr.is_ipv6() && !self.use_ipv6 {
+                continue
+            }
+            
             if let Err(e) = self.socket.send_to(buf, addr) {
                 if is_timeout(&e) {
                     continue;
@@ -187,7 +197,7 @@ impl Handler for UdpHandler {
 
                 bail!(e);
             }
-            
+
             if res.is_empty() {
                 bail!("Got empty response from {}", addr.to_string());
             }

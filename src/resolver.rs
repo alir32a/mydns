@@ -28,7 +28,7 @@ pub struct RecursiveResolver {
 impl RecursiveResolver {
     pub fn new() -> Self {
         Self {
-            base_handler: Box::new(UdpHandler::new(get_root_servers_handle_targets(false), Duration::from_secs(5))),
+            base_handler: Box::new(UdpHandler::new(get_root_servers_handle_targets(false), Duration::from_secs(5), false)),
             max_recursion_depth: 10
         }
     }
@@ -94,7 +94,7 @@ impl RecursiveResolver {
                     0)?;
 
                 if ns.header.code == ResultCode::NOERROR.to_u8() {
-                    ns.resources.iter().for_each(|resource| {
+                    ns.answers.iter().for_each(|resource| {
                         match resource.rtype {
                             DNSType::A => {
                                 if let RecordData::A(addr) = resource.data {
@@ -159,7 +159,7 @@ pub struct ForwardResolver {
 impl ForwardResolver {
     pub fn new(addrs: Vec<SocketAddr>) -> Self {
         Self {
-            base_handler: Box::new(UdpHandler::new(addrs, Duration::from_secs(5))),
+            base_handler: Box::new(UdpHandler::new(addrs, Duration::from_secs(5), false)),
         }
     }
 }
