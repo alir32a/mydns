@@ -6,6 +6,10 @@ pub enum ResultCode {
     NXDOMAIN = 3,
     NOTIMP = 4,
     REFUSED = 5,
+    YXDOMAIN = 6,
+    XRRSET = 7,
+    NOTAUTH = 8,
+    NOTZONE = 9,
 }
 
 impl ResultCode {
@@ -16,6 +20,10 @@ impl ResultCode {
             3 => ResultCode::NXDOMAIN,
             4 => ResultCode::NOTIMP,
             5 => ResultCode::REFUSED,
+            6 => ResultCode::YXDOMAIN,
+            7 => ResultCode::XRRSET,
+            8 => ResultCode::NOTAUTH,
+            9 => ResultCode::NOTZONE,
             0 | _ => ResultCode::NOERROR,
         }
     }
@@ -28,6 +36,10 @@ impl ResultCode {
             ResultCode::NXDOMAIN => 3,
             ResultCode::NOTIMP => 4,
             ResultCode::REFUSED => 5,
+            ResultCode::YXDOMAIN => 6,
+            ResultCode::XRRSET => 7,
+            ResultCode::NOTAUTH => 8,
+            ResultCode::NOTZONE => 9,
         }
     }
 }

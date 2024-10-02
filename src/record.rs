@@ -1,17 +1,17 @@
 use anyhow::Result;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use crate::bytes_util::BytesUtil;
-use crate::dns_class::DNSClass;
+use crate::query_class::QueryClass;
 use crate::parser::PacketParser;
-use crate::dns_type::DNSType;
+use crate::query_type::QueryType;
 use crate::pair::BytesPair;
 use crate::writer::PacketWriter;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Record {
     pub domain: String,
-    pub rtype: DNSType,
-    pub rclass: DNSClass,
+    pub rtype: QueryType,
+    pub rclass: QueryClass,
     pub ttl: u32,
     pub len: u16,
     pub data: RecordData,
@@ -21,8 +21,8 @@ impl Record {
     pub fn parse(parser: &mut PacketParser) -> Result<Record> {
         let domain = parser.parse_domain_name()?;
 
-        let rtype = DNSType::from(parser.next_u16()?);
-        let rclass = DNSClass::from(parser.next_u16()?);
+        let rtype = QueryType::from(parser.next_u16()?);
+        let rclass = QueryClass::from(parser.next_u16()?);
         let ttl = parser.next_u32()?;
         let len = parser.next_u16()?;
 
@@ -36,7 +36,7 @@ impl Record {
         };
 
         match record.rtype {
-            DNSType::A => {
+            QueryType::A => {
                 let raw_addr = parser.next_u32()?;
                 record.data = RecordData::A(
                     Ipv4Addr::new(
@@ -49,27 +49,27 @@ impl Record {
 
                 Ok(record)
             },
-            DNSType::NS => {
+            QueryType::NS => {
                 record.data = RecordData::NS(parser.parse_domain_name()?);
 
                 Ok(record)
             },
-            DNSType::CNAME => {
+            QueryType::CNAME => {
                 record.data = RecordData::CNAME(parser.parse_domain_name()?);
 
                 Ok(record)
             },
-            DNSType::PTR => {
+            QueryType::PTR => {
                 record.data = RecordData::PTR(parser.parse_domain_name()?);
 
                 Ok(record)
             },
-            DNSType::TXT => {
+            QueryType::TXT => {
                 record.data = RecordData::TXT(parser.parse_domain_name()?);
 
                 Ok(record)
             },
-            DNSType::SOA => {
+            QueryType::SOA => {
                 record.data = RecordData::SOA {
                       mname: parser.parse_domain_name()?,
                       rname: parser.parse_domain_name()?,
@@ -82,7 +82,7 @@ impl Record {
 
                 Ok(record)
             },
-            DNSType::MX => {
+            QueryType::MX => {
                 record.data = RecordData::MX {
                     preference: parser.next_u16()?,
                     exchange: parser.parse_domain_name()?,
@@ -90,7 +90,7 @@ impl Record {
 
                 Ok(record)
             },
-            DNSType::AAAA => {
+            QueryType::AAAA => {
                 let first_part = parser.next_u32()?;
                 let second_part = parser.next_u32()?;
                 let third_part = parser.next_u32()?;
@@ -116,7 +116,7 @@ impl Record {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum RecordData {
     A(Ipv4Addr),
     NS(String),

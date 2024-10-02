@@ -1,19 +1,19 @@
-use std::cell::{OnceCell, RefCell, RefMut};
-use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::ops::{Deref, DerefMut};
+use std::collections::{HashMap};
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::Duration;
+use std::sync::Arc;
 use anyhow::{bail, Result};
 use rand::{random};
-use tracing::error;
-use crate::dns_type::DNSType;
+use tracing::{error, info};
+use crate::cache::{DnsCache, DnsCacheItem};
+use crate::query_type::QueryType;
 use crate::handler::{Handler, UdpHandler};
 use crate::packet::Packet;
 use crate::parser::PacketParser;
 use crate::question::Question;
 use crate::record::{Record, RecordData};
 use crate::result_code::ResultCode;
-use crate::root::{get_root_servers_handle_targets, ROOT_SERVERS};
+use crate::root::{get_root_servers_socket_addrs};
 use crate::writer::PacketWriter;
 
 pub trait Resolver {
@@ -22,13 +22,15 @@ pub trait Resolver {
 
 pub struct RecursiveResolver {
     pub base_handler: Box<dyn Handler>,
+    cache: Arc<DnsCache>,
     max_recursion_depth: u16,
 }
 
 impl RecursiveResolver {
     pub fn new() -> Self {
         Self {
-            base_handler: Box::new(UdpHandler::new(get_root_servers_handle_targets(false), Duration::from_secs(5), false)),
+            base_handler: Box::new(UdpHandler::new(get_root_servers_socket_addrs(false), Duration::from_secs(5), false)),
+            cache: Arc::new(DnsCache::new()),
             max_recursion_depth: 10
         }
     }
@@ -43,19 +45,19 @@ impl RecursiveResolver {
             bail!("maximum resolve recursion depth exceeded")
         }
 
-        let res = lookup(&mut self.base_handler, &question, addrs)?;
+        let res = lookup(self.cache.clone(), &mut self.base_handler, &question, addrs)?;
         
         if is_resolved(question, &res) {
             return Ok(res);
         }
 
         let mut cnames: Vec<&Record> = res.answers.iter().filter(|&record| {
-            record.rtype == DNSType::CNAME
+            record.rtype == QueryType::CNAME
         }).collect();
 
         // some servers may send cname records in additional section
         cnames.append(&mut res.resources.iter().filter(|&record| {
-            record.rtype == DNSType::CNAME
+            record.rtype == QueryType::CNAME
         }).collect());
 
         if !cnames.is_empty() {
@@ -89,19 +91,19 @@ impl RecursiveResolver {
         for authority in authorities {
             if let RecordData::NS(domain) = &authority.data {
                 let ns = self.recursive_lookup(
-                    &Question::new(domain.clone(), DNSType::A),
+                    &Question::new(domain.clone(), QueryType::A),
                     None,
                     0)?;
 
                 if ns.header.code == ResultCode::NOERROR.to_u8() {
                     ns.answers.iter().for_each(|resource| {
                         match resource.rtype {
-                            DNSType::A => {
+                            QueryType::A => {
                                 if let RecordData::A(addr) = resource.data {
                                     res.push(SocketAddr::from(SocketAddrV4::new(addr, 53)))
                                 }
                             },
-                            DNSType::AAAA => {
+                            QueryType::AAAA => {
                                 if let RecordData::AAAA(addr) = resource.data {
                                     res.push(SocketAddr::from(SocketAddrV6::new(addr, 53, 0, 0)))
                                 }
@@ -136,6 +138,8 @@ impl Resolver for RecursiveResolver {
         for question in req.questions {
             match self.recursive_lookup(&question, None, 0) {
                 Ok(result) => {
+                    res.header.code = result.header.code;
+                    
                     append_results(&mut res, result);
                 },
                 Err(e) => {
@@ -154,12 +158,14 @@ impl Resolver for RecursiveResolver {
 
 pub struct ForwardResolver {
     pub base_handler: Box<dyn Handler>,
+    cache: Arc<DnsCache>,
 }
 
 impl ForwardResolver {
     pub fn new(addrs: Vec<SocketAddr>) -> Self {
         Self {
             base_handler: Box::new(UdpHandler::new(addrs, Duration::from_secs(5), false)),
+            cache: Arc::new(DnsCache::new())
         }
     }
 }
@@ -181,7 +187,7 @@ impl Resolver for ForwardResolver {
         }
 
         for question in req.questions {
-            if let Ok(result) = lookup(&mut self.base_handler, &question, None) {
+            if let Ok(result) = lookup(self.cache.clone(), &mut self.base_handler, &question, None) {
                 append_results(&mut res, result);
             } else {
                 res.header.code = ResultCode::SERVFAIL.to_u8();
@@ -194,8 +200,17 @@ impl Resolver for ForwardResolver {
     }
 }
 
-pub fn lookup(handler: &mut Box<dyn Handler>, question: &Question, addrs: Option<Vec<SocketAddr>>) -> Result<Packet> {
+pub fn lookup(
+    cache: Arc<DnsCache>,
+    handler: &mut Box<dyn Handler>, 
+    question: &Question, 
+    addrs: Option<Vec<SocketAddr>>)
+    -> Result<Packet> {
     let req = new_query_packet(question.clone());
+    
+    if let Some(records) = cache.get(question.domain.as_str()) {
+        return Ok(create_resp_packet(&req, records));
+    }
 
     let req_buf = PacketWriter::from(req).write()?;
 
@@ -212,7 +227,29 @@ pub fn lookup(handler: &mut Box<dyn Handler>, question: &Question, addrs: Option
     let mut res = PacketParser::new(&res_buf).parse()?;
     res.header.recursion_available = true;
     res.header.response = true;
-
+    
+    if !res.answers.is_empty() {
+        let filter = |record: &Record| {
+            if record.domain != question.domain {
+                return None;    
+            }
+            
+            return match record.rtype {
+                QueryType::A | QueryType::AAAA | QueryType::SOA => {
+                    Some(record.clone())
+                },
+                _ => {
+                    None
+                }
+            }
+        };
+        
+        let mut resolved: Vec<Record> = res.answers.iter().filter_map(filter).collect();
+        resolved.append(&mut res.resources.iter().filter_map(filter).collect());
+        
+        cache.set(question.domain.as_str(), DnsCacheItem::new(resolved));
+    }
+    
     Ok(res)
 }
 
@@ -256,12 +293,12 @@ fn get_resolved_ns(resources: &Vec<Record>) -> Vec<SocketAddr> {
 
     resources.iter().for_each(|resource| {
         match resource.rtype {
-            DNSType::A => {
+            QueryType::A => {
                 if let RecordData::A(addr) = resource.data {
                     res.push(SocketAddr::from(SocketAddrV4::new(addr, 53)))
                 }
             },
-            DNSType::AAAA => {
+            QueryType::AAAA => {
                 if let RecordData::AAAA(addr) = resource.data {
                     res.push(SocketAddr::from(SocketAddrV6::new(addr, 53, 0, 0)))
                 }
@@ -299,4 +336,15 @@ fn new_query_packet(question: Question) -> Packet {
     req.questions.push(question);
 
     req
+}
+
+fn create_resp_packet(req: &Packet, records: Vec<Record>) -> Packet {
+    let mut packet = Packet::from(req);
+    packet.header.recursion_available = true;
+    packet.header.response = true;
+    packet.header.answer_count = records.len() as u16;
+
+    packet.answers = records;
+    
+    packet
 }

@@ -1,7 +1,6 @@
 use std::net::{SocketAddr, UdpSocket};
 use anyhow::{Result};
 use tracing::{error, info};
-use crate::parser::PacketParser;
 use crate::resolver::{ForwardResolver, RecursiveResolver, Resolver};
 
 pub trait DnsServer {
@@ -60,7 +59,7 @@ impl DnsServer for UdpDnsServer {
                     udp_socket.send_to(res.as_slice(), source).expect("Failed to send response");
                 }
                 Err(e) => {
-                    error!("Error receiving data: {}", e);
+                    error!("Error receiving records: {}", e);
                 }
             }
         }

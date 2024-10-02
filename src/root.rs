@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 pub struct RootServer(&'static str, Ipv4Addr, Ipv6Addr);
 
@@ -79,7 +79,7 @@ pub static ROOT_SERVERS: [RootServer; 13] = [
     ),
 ];
 
-pub fn get_root_servers_handle_targets(use_v6: bool) -> Vec<SocketAddr> {
+pub fn get_root_servers_socket_addrs(use_v6: bool) -> Vec<SocketAddr> {
     let mut res = Vec::new();
     for server in &ROOT_SERVERS {
         let (v4, v6) = server.to_socket_addrs();

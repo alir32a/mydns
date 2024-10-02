@@ -1,10 +1,10 @@
 use rand::random;
-use crate::dns_type::DNSType;
+use crate::query_type::QueryType;
 use crate::header::Header;
 use crate::question::Question;
 use crate::record::Record;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Packet {
     pub header: Header,
     pub questions: Vec<Question>,
@@ -36,7 +36,7 @@ impl Packet {
                 question_count: 1,
                 ..Default::default()
             },
-            questions: vec![Question::new(".".to_string(), DNSType::A)],
+            questions: vec![Question::new(".".to_string(), QueryType::A)],
             ..Default::default()
         }
     }

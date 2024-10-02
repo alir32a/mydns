@@ -1,5 +1,5 @@
 use std::io::{Error, ErrorKind};
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, RwLock};
 use rand::{thread_rng, Rng};
 use anyhow::{bail, Result};

@@ -1,16 +1,16 @@
-use crate::dns_class::DNSClass;
+use crate::query_class::QueryClass;
 use crate::pair::BytesPair;
-use crate::dns_type::DNSType;
+use crate::query_type::QueryType;
 
 #[derive(Default, Clone, Debug)]
 pub struct Question {
     pub domain: String,
-    pub qtype: DNSType,
-    pub qclass: DNSClass
+    pub qtype: QueryType,
+    pub qclass: QueryClass
 }
 
 impl Question {
-    pub fn new(name: String, qtype: DNSType) -> Question {
+    pub fn new(name: String, qtype: QueryType) -> Question {
         Question {
             domain: name,
             qtype,
@@ -18,7 +18,7 @@ impl Question {
         }
     }
 
-    pub fn new_with_class(name: String, qtype: DNSType, qclass: DNSClass) -> Question {
+    pub fn new_with_class(name: String, qtype: QueryType, qclass: QueryClass) -> Question {
         Question {
             domain: name,
             qtype,

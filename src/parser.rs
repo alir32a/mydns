@@ -1,9 +1,9 @@
 use anyhow::{bail, Result};
-use crate::dns_class::DNSClass;
+use crate::query_class::QueryClass;
 use crate::header::Header;
 use crate::packet::Packet;
 use crate::pair::BytesPair;
-use crate::dns_type::DNSType;
+use crate::query_type::QueryType;
 use crate::question::Question;
 use crate::record::Record;
 
@@ -143,7 +143,7 @@ impl PacketParser {
         let qtype = self.next_u16()?;
         let qclass = self.next_u16()?;
 
-        Ok(Question::new_with_class(name, DNSType::from(qtype), DNSClass::from(qclass)))
+        Ok(Question::new_with_class(name, QueryType::from(qtype), QueryClass::from(qclass)))
     }
 
     pub fn parse_domain_name(&mut self) -> Result<String> {
