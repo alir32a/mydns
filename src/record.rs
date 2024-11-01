@@ -7,7 +7,7 @@ use crate::query_type::QueryType;
 use crate::pair::BytesPair;
 use crate::writer::PacketWriter;
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct Record {
     pub domain: String,
     pub rtype: QueryType,
@@ -211,5 +211,11 @@ impl RecordData {
                 Ok(vec![0; *n as usize])
             }
         }
+    }
+}
+
+impl Default for RecordData {
+    fn default() -> Self {
+        Self::UNKNOWN(u16::default())
     }
 }

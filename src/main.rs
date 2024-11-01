@@ -15,6 +15,7 @@ mod root;
 mod context;
 mod handler;
 mod cache;
+mod zone;
 
 use clap::{Parser};
 use tracing::{error, Level};
@@ -33,7 +34,7 @@ struct Args {
 #[tokio::main]
 async fn main() {
     let subscriber = FmtSubscriber::builder().with_max_level(Level::TRACE).finish();
-
+    
     tracing::subscriber::set_global_default(subscriber).expect("Failed to initialize logger");
 
     let args = Args::parse();
