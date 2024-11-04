@@ -15,9 +15,9 @@ use crate::zone::token::{Keyword, Token, TokenType};
 
 #[derive(Default)]
 pub struct Zone {
-    origin: String,
-    ttl: Option<usize>,
-    records: Vec<Record>
+    pub(crate) origin: String,
+    pub(crate) ttl: Option<usize>,
+    pub(crate) records: Vec<Record>
 }
 
 impl Zone {

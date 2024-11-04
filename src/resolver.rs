@@ -15,9 +15,96 @@ use crate::record::{Record, RecordData};
 use crate::result_code::ResultCode;
 use crate::root::{get_root_servers_socket_addrs};
 use crate::writer::PacketWriter;
+use crate::zone::parser::Zone;
 
 pub trait Resolver {
     fn resolve(&mut self, buf: &[u8]) -> Result<Vec<u8>>;
+}
+
+pub struct AuthoritativeResolver {
+    cache: Arc<DnsCache>,
+    zone_dir: String,
+    nested_zones: bool
+}
+
+impl AuthoritativeResolver {
+    pub fn new(zones: &str, nested: bool) -> Self {
+        Self {
+            cache: Arc::new(DnsCache::new()),
+            zone_dir: zones.to_string(),
+            nested_zones: nested,
+        }
+    }
+    
+    pub fn load_zones(&mut self) -> Result<()> {
+        let zones = Zone::parse_directory(&self.zone_dir, self.nested_zones)?;
+        
+        let cache = self.cache.clone();
+        for zone in zones {
+            cache.set(zone.origin.as_str(), DnsCacheItem::new(zone.records));    
+        }
+        
+        Ok(())
+    }
+}
+
+impl Resolver for AuthoritativeResolver {
+    fn resolve(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
+        let req = match PacketParser::new(buf).parse() {
+            Ok(packet) => packet,
+            Err(_e) => {
+                let mut res = Packet::new();
+                res.header.code = ResultCode::FORMERR.to_u8();
+                res.header.authoritive = true;
+                res.header.recursion_available = false;
+                
+                return PacketWriter::from(res).write();
+            }
+        };
+        
+        let mut res = Packet::from(&req);
+        res.header.authoritive = true;
+        res.header.recursion_available = false;
+        res.header.code = ResultCode::NOERROR.to_u8();
+        
+        if req.questions.len() == 0 {
+            res.header.code = ResultCode::FORMERR.to_u8();
+
+            return PacketWriter::from(res).write();
+        }
+        
+        for question in &req.questions {
+            if let Some(records) = self.cache.get(question.domain.as_str()) {
+                records.iter().for_each(|record| {
+                    match record.rtype { 
+                        QueryType::NS => {
+                            res.authorities.push(record.clone());
+                            res.header.authority_count += 1;
+                            
+                            if let RecordData::NS(ns) = &record.data {
+                                if let Some(mut ns) = self.cache.get(ns) {
+                                    res.header.resource_count += ns.len() as u16;
+                                    res.resources.append(&mut ns);
+                                }
+                            }
+                        }
+                        _ => {
+                            res.answers.push(record.clone());
+                            res.header.answer_count += 1;
+                        }
+                    }
+                })
+            }
+        }
+        
+        if res.authorities.len() == 0 && res.answers.len() == 0 {
+            res.header.code = ResultCode::NXDOMAIN.to_u8();
+
+            return PacketWriter::from(res).write();
+        }
+
+        PacketWriter::from(res).write()
+    }
 }
 
 pub struct RecursiveResolver {
