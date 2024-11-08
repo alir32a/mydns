@@ -4,7 +4,7 @@ pub struct Header {
     pub id: u16,
     pub response: bool,
     pub opcode: u8,
-    pub authoritive: bool,
+    pub authoritative: bool,
     pub truncation: bool,
     pub recursion_desired: bool,
     pub recursion_available: bool,

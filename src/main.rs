@@ -16,20 +16,15 @@ mod context;
 mod handler;
 mod cache;
 mod zone;
+mod args;
+mod duration;
 
 use clap::{Parser};
 use tracing::{error, Level};
 use tracing_subscriber::FmtSubscriber;
+use crate::args::Args;
+use crate::context::Context;
 use crate::server::{DnsServer, UdpDnsServer};
-
-#[derive(Parser, Debug)]
-#[command(about)]
-struct Args {
-    #[arg(long, short, default_value_t = 53)]
-    port: u16,
-    #[arg(long, short, value_parser, num_args = 1.., value_delimiter = ',')]
-    forward: Option<Vec<String>>
-}
 
 #[tokio::main]
 async fn main() {
@@ -39,7 +34,16 @@ async fn main() {
 
     let args = Args::parse();
 
-    let dns_server = UdpDnsServer::new(args.port, args.forward);
+    println!(r"
+   __  _____  _____  _  ______
+  /  |/  /\ \/ / _ \/ |/ / __/
+ / /|_/ /  \  / // /    /\ \  
+/_/  /_/   /_/____/_/|_/___/
+    ");
+    
+    let ctx = Context::from(args).unwrap();
+
+    let dns_server = UdpDnsServer::new(ctx);
     if let Err(e) = dns_server.start() {
         error!("Failed to start dns server: {}", e.to_string())
     }

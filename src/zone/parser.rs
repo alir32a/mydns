@@ -13,7 +13,7 @@ use crate::zone::error::{ParserError, ParserErrorKind};
 use crate::zone::scanner::Scanner;
 use crate::zone::token::{Keyword, Token, TokenType};
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Zone {
     pub(crate) origin: String,
     pub(crate) ttl: Option<usize>,
@@ -234,7 +234,7 @@ fn parse_keywords(keyword: Token, value: Token, res: &mut Zone) -> Result<()> {
         Some(keyword) => {
             match keyword {
                 Keyword::Origin => {
-                    res.origin = value.lexeme.to_owned();
+                    res.origin = trim_end(value.lexeme.to_owned());
                 },
                 Keyword::TTL => {
                     match usize::from_str(value.lexeme.as_str()) {
@@ -266,6 +266,14 @@ fn to_domain(mut s: String, origin: &String) -> String {
     }
     
     [s, origin.clone()].join(".")
+}
+
+fn trim_end(mut s: String) -> String {
+    if s.ends_with(".") {
+        s.remove(s.len()-1);
+    }
+    
+    s
 }
 
 fn get_next_token(t: &mut Enumerate<IntoIter<Token>>, line: u16) -> Result<Token> {

@@ -1,11 +1,8 @@
 use anyhow::Result;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use crate::bytes_util::BytesUtil;
 use crate::query_class::QueryClass;
 use crate::parser::PacketParser;
 use crate::query_type::QueryType;
-use crate::pair::BytesPair;
-use crate::writer::PacketWriter;
 
 #[derive(Default, Debug, Clone)]
 pub struct Record {
@@ -148,70 +145,6 @@ pub enum RecordData {
         host: String,
     },
     UNKNOWN(u16)
-}
-
-impl RecordData {
-    pub fn bytes(&self) -> Result<Vec<u8>> {
-        match self {
-            RecordData::A(addr) => {
-                Ok(addr.octets().to_vec())
-            },
-            RecordData::NS(host) | RecordData::CNAME(host) |
-            RecordData::PTR(host) | RecordData::TXT(host) => {
-                PacketWriter::write_domain(host)
-            },
-            RecordData::SOA {
-                mname,
-                rname,
-                serial,
-                refresh,
-                retry,
-                expire,
-                minimum
-            } => {
-                let mut res: Vec<u8> = PacketWriter::write_domain(mname)?;
-                res.append(&mut PacketWriter::write_domain(rname)?);
-                res.append(&mut BytesUtil::from_u32(*serial).to_vec());
-                res.append(&mut BytesUtil::from_u32(*refresh).to_vec());
-                res.append(&mut BytesUtil::from_u32(*retry).to_vec());
-                res.append(&mut BytesUtil::from_u32(*expire).to_vec());
-                res.append(&mut BytesUtil::from_u32(*minimum).to_vec());
-
-                Ok(res)
-            },
-            RecordData::HINFO { ref cpu, ref os} => {
-                let mut res: Vec<u8> = cpu.bytes().collect();
-                res.append(&mut os.bytes().collect());
-
-                Ok(res)
-            },
-            RecordData::MX { preference, exchange } => {
-                let mut res: Vec<u8> = BytesPair::from(*preference).bytes();
-                res.append(&mut PacketWriter::write_domain(exchange)?);
-
-                Ok(res)
-            },
-            RecordData::AAAA(addr) => {
-                Ok(addr.octets().to_vec())
-            },
-            RecordData::SRV {
-                priority,
-                weight,
-                port,
-                host
-            } => {
-                let mut res = BytesPair::from(*priority).bytes();
-                res.append(&mut BytesPair::from(*weight).bytes());
-                res.append(&mut BytesPair::from(*port).bytes());
-                res.append(&mut PacketWriter::write_domain(host)?);
-
-                Ok(res)
-            },
-            RecordData::UNKNOWN(n) => {
-                Ok(vec![0; *n as usize])
-            }
-        }
-    }
 }
 
 impl Default for RecordData {

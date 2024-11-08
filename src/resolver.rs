@@ -1,10 +1,11 @@
 use std::collections::{HashMap};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::path::PathBuf;
 use std::time::Duration;
 use std::sync::Arc;
 use anyhow::{bail, Result};
 use rand::{random};
-use tracing::{error, info};
+use tracing::{error};
 use crate::cache::{DnsCache, DnsCacheItem};
 use crate::query_type::QueryType;
 use crate::handler::{Handler, UdpHandler};
@@ -23,21 +24,25 @@ pub trait Resolver {
 
 pub struct AuthoritativeResolver {
     cache: Arc<DnsCache>,
-    zone_dir: String,
+    zones: PathBuf,
     nested_zones: bool
 }
 
 impl AuthoritativeResolver {
-    pub fn new(zones: &str, nested: bool) -> Self {
-        Self {
+    pub fn new(zones: PathBuf, nested: bool) -> Result<Self> {
+        let mut res = Self {
             cache: Arc::new(DnsCache::new()),
-            zone_dir: zones.to_string(),
             nested_zones: nested,
-        }
+            zones,
+        };
+
+        res.load_zones()?;
+
+        Ok(res)
     }
     
     pub fn load_zones(&mut self) -> Result<()> {
-        let zones = Zone::parse_directory(&self.zone_dir, self.nested_zones)?;
+        let zones = Zone::parse_directory(&self.zones, self.nested_zones)?;
         
         let cache = self.cache.clone();
         for zone in zones {
@@ -55,21 +60,23 @@ impl Resolver for AuthoritativeResolver {
             Err(_e) => {
                 let mut res = Packet::new();
                 res.header.code = ResultCode::FORMERR.to_u8();
-                res.header.authoritive = true;
+                res.header.authoritative = true;
                 res.header.recursion_available = false;
+                res.header.response = true;
                 
                 return PacketWriter::from(res).write();
             }
         };
         
         let mut res = Packet::from(&req);
-        res.header.authoritive = true;
+        res.header.authoritative = true;
         res.header.recursion_available = false;
+        res.header.response = true;
         res.header.code = ResultCode::NOERROR.to_u8();
         
         if req.questions.len() == 0 {
             res.header.code = ResultCode::FORMERR.to_u8();
-
+            
             return PacketWriter::from(res).write();
         }
         
@@ -87,13 +94,29 @@ impl Resolver for AuthoritativeResolver {
                                     res.resources.append(&mut ns);
                                 }
                             }
-                        }
+                        },
+                        QueryType::SOA => {
+                            return
+                        },
                         _ => {
                             res.answers.push(record.clone());
                             res.header.answer_count += 1;
                         }
                     }
-                })
+                });
+
+                if res.answers.len() == 0 {
+                    if let Some(record) = records.iter().find_map(|record| {
+                        if record.rtype == QueryType::SOA {
+                            return Some(record)
+                        }
+
+                        None
+                    }) {
+                        res.answers.push(record.clone());
+                        res.header.answer_count += 1;
+                    }
+                }
             }
         }
         
@@ -250,8 +273,14 @@ pub struct ForwardResolver {
 
 impl ForwardResolver {
     pub fn new(addrs: Vec<SocketAddr>) -> Self {
+        let handler = UdpHandler::new(
+            addrs,
+            Duration::from_secs(5),
+            false
+        );
+
         Self {
-            base_handler: Box::new(UdpHandler::new(addrs, Duration::from_secs(5), false)),
+            base_handler: Box::new(handler),
             cache: Arc::new(DnsCache::new())
         }
     }

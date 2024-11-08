@@ -127,7 +127,7 @@ impl PacketParser {
 
         header.response = (pair.0 & (1 << 7)) == 1;
         header.opcode = (pair.0 >> 3) & 0x0F;
-        header.authoritive = (pair.0 & (1 << 2)) == 1;
+        header.authoritative = (pair.0 & (1 << 2)) == 1;
         header.truncation = (pair.0 & (1 << 1)) == 1;
         header.recursion_desired = (pair.0 & (1 << 0)) == 1;
 

@@ -1,15 +1,18 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use anyhow::{bail, Result};
 use crate::bytes_util::BytesUtil;
 use crate::header::Header;
 use crate::packet::Packet;
 use crate::pair::BytesPair;
-use crate::record::Record;
+use crate::record::{Record, RecordData};
 
 #[derive(Default)]
 pub struct PacketWriter {
     pub packet: Packet,
     buf: Vec<u8>,
     offset: u16,
+    domains_buf: RefCell<HashMap<String, u16>>
 }
 
 impl PacketWriter {
@@ -26,6 +29,7 @@ impl PacketWriter {
             packet,
             buf: Vec::from([0u8; 512]),
             offset: 0,
+            domains_buf: RefCell::new(HashMap::new())
         }
     }
 
@@ -35,9 +39,9 @@ impl PacketWriter {
 
         self.write_header()?;
         self.write_questions()?;
-        self.write_bytes(Self::write_records(&self.packet.answers)?)?;
-        self.write_bytes(Self::write_records(&self.packet.authorities)?)?;
-        self.write_bytes(Self::write_records(&self.packet.resources)?)?;
+        self.write_bytes(self.write_records(&self.packet.answers)?)?;
+        self.write_bytes(self.write_records(&self.packet.authorities)?)?;
+        self.write_bytes(self.write_records(&self.packet.resources)?)?;
 
         Ok(self.buf.clone())
     }
@@ -66,7 +70,7 @@ impl PacketWriter {
 
         let mut buf: Vec<u8> = Vec::new();
         for question in &self.packet.questions {
-            let domain = Self::write_domain(&question.domain)?;
+            let domain = self.write_domain(&question.domain)?;
             for byte in domain {
                 buf.push(byte);
             }
@@ -83,43 +87,112 @@ impl PacketWriter {
         Ok(())
     }
 
-    fn write_records(records: &Vec<Record>) -> Result<Vec<u8>> {
+    fn write_records(&self, records: &Vec<Record>) -> Result<Vec<u8>> {
         let mut res = Vec::new();
 
         for record in records {
-            let mut bytes = Self::write_domain(&record.domain)?;
+            let mut bytes = self.write_record(&record)?;
             res.append(&mut bytes);
-
-            res.append(&mut BytesPair::from(record.rtype.to_num()).bytes());
-            res.append(&mut BytesPair::from(record.rclass.to_num()).bytes());
-
-            res.append(&mut BytesUtil::from_u32(record.ttl).to_vec());
-
-            let mut data = record.data.bytes()?;
-            res.append(&mut BytesPair::from(data.len() as u16).bytes());
-            res.append(&mut data);
         }
 
         Ok(res)
     }
-
-    pub fn write_domain(domain: &String) -> Result<Vec<u8>> {
+    
+    fn write_record(&self, record: &Record) -> Result<Vec<u8>> {
         let mut res = Vec::new();
 
-        for label in domain.split('.') {
-            if label.len() > 63 {
-                bail!("labels exceeds 63 character limit");
-            }
+        let mut bytes = self.write_domain(&record.domain)?;
+        res.append(&mut bytes);
 
-            res.push(label.len() as u8);
-            for byte in label.as_bytes() {
-                res.push(*byte);
+        res.append(&mut BytesPair::from(record.rtype.to_num()).bytes());
+        res.append(&mut BytesPair::from(record.rclass.to_num()).bytes());
+
+        res.append(&mut BytesUtil::from_u32(record.ttl).to_vec());
+
+        let mut data = self.write_record_data(&record.data)?;
+        res.append(&mut BytesPair::from(data.len() as u16).bytes());
+        res.append(&mut data);
+        
+        Ok(res)
+    }
+    
+    fn write_record_data(&self, data: &RecordData) -> Result<Vec<u8>> {
+        match data {
+            RecordData::A(addr) => {
+                Ok(addr.octets().to_vec())
+            },
+            RecordData::NS(host) | RecordData::CNAME(host) |
+            RecordData::PTR(host) | RecordData::TXT(host) => {
+                self.write_domain(host)
+            },
+            RecordData::SOA {
+                mname,
+                rname,
+                serial,
+                refresh,
+                retry,
+                expire,
+                minimum
+            } => {
+                let mut res: Vec<u8> = self.write_domain(mname)?;
+                res.append(&mut self.write_domain(rname)?);
+                res.append(&mut BytesUtil::from_u32(*serial).to_vec());
+                res.append(&mut BytesUtil::from_u32(*refresh).to_vec());
+                res.append(&mut BytesUtil::from_u32(*retry).to_vec());
+                res.append(&mut BytesUtil::from_u32(*expire).to_vec());
+                res.append(&mut BytesUtil::from_u32(*minimum).to_vec());
+                
+                Ok(res)
+            },
+            RecordData::HINFO { ref cpu, ref os} => {
+                let mut res: Vec<u8> = cpu.bytes().collect();
+                res.append(&mut os.bytes().collect());
+
+                Ok(res)
+            },
+            RecordData::MX { preference, exchange } => {
+                let mut res: Vec<u8> = BytesPair::from(*preference).bytes();
+                res.append(&mut self.write_domain(exchange)?);
+
+                Ok(res)
+            },
+            RecordData::AAAA(addr) => {
+                Ok(addr.octets().to_vec())
+            },
+            RecordData::SRV {
+                priority,
+                weight,
+                port,
+                host
+            } => {
+                let mut res = BytesPair::from(*priority).bytes();
+                res.append(&mut BytesPair::from(*weight).bytes());
+                res.append(&mut BytesPair::from(*port).bytes());
+                res.append(&mut self.write_domain(host)?);
+
+                Ok(res)
+            },
+            RecordData::UNKNOWN(n) => {
+                Ok(vec![0; *n as usize])
+            }
+        }
+    }
+
+    pub fn write_domain(&self, domain: &String) -> Result<Vec<u8>> {
+        let mut res = Vec::new();
+
+        if let Some(offset) = self.domains_buf.borrow().get(domain) {
+            if (offset >> 8) as u8 & 0xC0 < 0x40 {
+                res.push((offset >> 8) as u8 | 0xC0);
+                res.push((offset & 0xFF) as u8);
+                
+                return Ok(res)
             }
         }
 
-        res.push(0x00);
+        self.domains_buf.borrow_mut().insert(domain.clone(), self.offset);
 
-        Ok(res)
+        write_domain(domain)
     }
 
     fn write_header_flags(header: &Header) -> (u8, u8) {
@@ -127,7 +200,7 @@ impl PacketWriter {
 
         res.0 = header.recursion_desired as u8
             | (header.truncation as u8) << 1
-            | (header.authoritive as u8) << 2
+            | (header.authoritative as u8) << 2
             | ((header.opcode & 0x0F) << 3)
             | (header.response as u8) << 7;
 
@@ -185,4 +258,23 @@ impl PacketWriter {
 
         Ok(())
     }
+}
+
+pub fn write_domain(domain: &String) -> Result<Vec<u8>> {
+    let mut res = Vec::new();
+
+    for label in domain.split('.') {
+        if label.len() > 63 {
+            bail!("labels exceeds 63 character limit");
+        }
+
+        res.push(label.len() as u8);
+        for byte in label.as_bytes() {
+            res.push(*byte);
+        }
+    }
+
+    res.push(0x00);
+
+    Ok(res)
 }
