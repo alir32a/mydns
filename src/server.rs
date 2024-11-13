@@ -1,55 +1,50 @@
-use std::net::{UdpSocket};
+use std::sync::Arc;
+use tokio::net::{UdpSocket};
 use anyhow::{bail, Result};
 use tracing::{error, info};
-use crate::context::{Context, ListenerProtocol, ServerContext};
+use crate::context::{Context, ListenerProtocol, ServerMode};
 use crate::resolver::{AuthoritativeResolver, ForwardResolver, RecursiveResolver, Resolver};
 
 pub trait DnsServer {
-    fn start(&self) -> Result<()>;
+    async fn start(&self) -> Result<()>;
 }
 
 pub struct UdpDnsServer {
-    pub ctx: Context
+    pub ctx: Arc<Context>
 }
 
 impl UdpDnsServer {
     pub fn new(ctx: Context) -> UdpDnsServer {
         Self {
-            ctx
+            ctx: Arc::new(ctx)
         }
     }
 }
 
 impl DnsServer for UdpDnsServer {
-    fn start(&self) -> Result<()> {
-        let resolver: Box<dyn Resolver>;
-        
-        match &self.ctx.server {
-            ServerContext::Authoritative { zones, nested_zones, .. } => {
-                resolver = Box::new(AuthoritativeResolver::new(zones.clone(), *nested_zones)?);
+    async fn start(&self) -> Result<()> {
+        let resolver: Arc<Box<dyn Resolver + Send + Sync>>;
+
+        match &self.ctx.server.mode {
+            ServerMode::Authoritative { zones, nested_zones, .. } => {
+                resolver = Arc::new(Box::new(AuthoritativeResolver::new(zones.clone(), *nested_zones)?));
             },
-            ServerContext::Proxy { forward } => {
-                resolver = Box::new(ForwardResolver::new(forward.to_vec()));
+            ServerMode::Proxy { .. } => {
+                resolver = Arc::new(Box::new(ForwardResolver::new(self.ctx.clone())));
             },
-            ServerContext::Recursive => {
-                resolver = Box::new(RecursiveResolver::new());
+            ServerMode::Recursive { .. } => {
+                resolver = Arc::new(Box::new(RecursiveResolver::new(self.ctx.clone())));
             }
         }
         
-        info!("Running in {} mode", self.ctx.server);
+        info!("Running in mode {}", self.ctx.server.mode);
 
-        self.run_server(resolver)
-    }
-}
-
-impl UdpDnsServer {
-    fn run_server(&self, mut resolver: Box<dyn Resolver>) -> Result<()> {
         let listener = &self.ctx.listener;
 
         match listener.proto {
             ListenerProtocol::UDP => {
-                let udp_socket = match UdpSocket::bind(self.ctx.listener.to_addr()) {
-                    Ok(socket) => socket,
+                let udp_socket = match UdpSocket::bind(self.ctx.listener.to_addr()).await {
+                    Ok(socket) => Arc::new(socket),
                     Err(err) => {
                         error!("Failed to start server: {}", err);
 
@@ -58,20 +53,29 @@ impl UdpDnsServer {
                 };
                 info!("Listening on {}", self.ctx.listener);
 
-                let mut buf = [0; 512];
-
+                let mut buf = vec![0; self.ctx.listener.max_packet_buf];
                 loop {
-                    match udp_socket.recv_from(&mut buf) {
+                    match udp_socket.recv_from(&mut buf).await {
                         Ok((_size, source)) => {
-                            let res = match resolver.resolve(&buf) {
-                                Ok(res) => res,
-                                Err(e) => {
-                                    error!("Resolve error: {}", e.to_string());
+                            let buf = Arc::new(buf.clone());
+                            let udp_socket = udp_socket.clone();
+                            let resolver = resolver.clone();
+                            
+                            tokio::spawn(async move {
+                                let res = match resolver.resolve(buf) {
+                                    Ok(res) => res,
+                                    Err(e) => {
+                                        error!("Resolve error: {}", e.to_string());
 
-                                    continue;
-                                }
-                            };
-                            udp_socket.send_to(res.as_slice(), source).expect("Failed to send response");
+                                        return;
+                                    }
+                                };
+
+                                udp_socket.
+                                    send_to(res.as_slice(), source).
+                                    await.
+                                    expect("Failed to send response");
+                            });
                         }
                         Err(e) => {
                             error!("Error receiving records: {}", e);

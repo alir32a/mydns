@@ -1,5 +1,3 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::str::FromStr;
 use crate::zone::token::Keyword::{Generate, Include, Origin, TTL};
 
 pub enum Keyword {

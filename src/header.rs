@@ -1,4 +1,3 @@
-
 #[derive(Clone, Default, Debug)]
 pub struct Header {
     pub id: u16,
@@ -19,24 +18,5 @@ pub struct Header {
 impl Header {
     pub fn new() -> Header {
         Header::default()
-    }
-
-    pub fn new_with_id(id: u16) -> Header {
-        Header {
-            id,
-            ..Default::default()
-        }
-    }
-
-    pub fn with_response_indicator(mut self) -> Self {
-        self.response = true;
-
-        self
-    }
-
-    pub fn with_question_count(mut self, n: u16) -> Self {
-        self.question_count = n;
-
-        self
     }
 }

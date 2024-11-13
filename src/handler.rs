@@ -3,6 +3,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, RwLock};
 use rand::{thread_rng, Rng};
 use anyhow::{bail, Result};
+use log::info;
 use tokio::{
     select,
     time::{
@@ -13,38 +14,40 @@ use tokio::{
     }
 };
 use tracing::error;
+use crate::context::{Context, ServerMode};
 use crate::packet::Packet;
+use crate::root::get_root_servers_socket_addrs;
 use crate::writer::PacketWriter;
 
 pub trait Handler {
-    fn send(&mut self, buf: &[u8]) -> Result<Vec<u8>>;
-    fn send_to(&mut self, buf: &[u8], addrs: &[SocketAddr]) -> Result<Vec<u8>>;
+    fn send(&self, buf: &[u8]) -> Result<Vec<u8>>;
+    fn send_to(&self, buf: &[u8], addrs: &[SocketAddr]) -> Result<Vec<u8>>;
 }
 
 struct Zero;
 
 pub struct UdpHandler {
-    use_ipv6: bool,
+    ctx: Arc<Context>,
     socket: Arc<UdpSocket>,
-    targets: Arc<Vec<SocketAddr>>,
-    failures: Arc<RwLock<Vec<usize>>>,
+    targets: Arc<RwLock<Box<dyn HandlerQueue>>>,
+    failures: Arc<RwLock<Vec<HandlerTarget>>>,
     shutdown_fn: Arc<mpsc::Sender<Zero>>,
 }
 
 impl UdpHandler {
-    pub fn try_new(addrs: Vec<SocketAddr>, timeout: Duration, use_ipv6: bool) -> Result<Self> {
+    pub fn try_new(ctx: Arc<Context>) -> Result<Self> {
         let socket = UdpSocket::bind(
             ("0.0.0.0", thread_rng().gen_range(9999..u16::MAX))
         )?;
-        socket.set_read_timeout(Some(timeout))?;
-        socket.set_write_timeout(Some(timeout))?;
+        socket.set_read_timeout(Some(ctx.server.default_timeout))?;
+        socket.set_write_timeout(Some(ctx.server.default_timeout))?;
 
         let (tx, rx) = mpsc::channel(1);
 
         let mut handler = Self {
-            use_ipv6,
+            ctx: ctx.clone(),
             socket: Arc::new(socket),
-            targets: Arc::new(Vec::from(addrs)),
+            targets: Arc::new(RwLock::new(get_queue(ctx.clone())?)),
             failures: Arc::new(RwLock::new(Vec::new())),
             shutdown_fn: Arc::new(tx)
         };
@@ -54,49 +57,48 @@ impl UdpHandler {
         Ok(handler)
     }
 
-    pub fn new(addrs: Vec<SocketAddr>, timeout: Duration, use_ipv6: bool) -> Self {
-        Self::try_new(addrs, timeout, use_ipv6).unwrap()
+    pub fn new(ctx: Arc<Context>) -> Self {
+        Self::try_new(ctx).unwrap()
     }
 
     fn run_failures_job(&mut self, mut shutdown: mpsc::Receiver<Zero>) {
-        let failures = self.failures.clone();
-        let queue = self.targets.clone();
         let socket = self.socket.clone();
+        let failures = self.failures.clone();
+        let targets = self.targets.clone();
+        let retry_interval = self.ctx.server.retry_interval;
 
          tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            let mut interval = tokio::time::interval(retry_interval);
 
             loop {
                 select! {
                     _ = interval.tick() => {
                         let faileds = failures.read().unwrap().to_vec();
 
-                        for (i, idx) in faileds.into_iter().enumerate() {
+                        for (i, target) in faileds.into_iter().enumerate() {
+                            info!("retrying {}...", target.addr);
+                            
                             let buf = PacketWriter::from(Packet::get_empty_packet()).write().unwrap();
-                            let target = queue[idx].clone();
 
-                            match socket.send_to(buf.as_slice(), target) {
+                            match socket.send_to(buf.as_slice(), target.addr) {
                                 Ok(n) => {
                                     if n == 0 {
-                                        error!("Unable to send UDP message to {}", target.to_string());
+                                        error!("Unable to send UDP message to {}", target.addr.to_string());
 
                                         continue;
                                     }
 
                                     let mut buf = [0u8; 512];
                                     match socket.recv(&mut buf) {
-                                        Ok(n) => {
-                                            if let Some(n) = failures.read().unwrap().iter().find(|index| {
-                                                **index == idx
-                                            }) {
-                                                failures.write().unwrap().remove(*n);   
-                                            }
+                                        Ok(_n) => {
+                                            failures.write().unwrap().remove(i);  
+                                            targets.write().unwrap().push(target);
                                         },
                                         Err(e) => {
                                             error!(
                                                 "Got an error while receiving UDP message to \
                                                 {} => {}",
-                                                target.to_string(),
+                                                target.addr.to_string(),
                                                 e.to_string(),
                                             );
                                         }
@@ -105,7 +107,7 @@ impl UdpHandler {
                                 Err(e) => {
                                     error!(
                                         "Got an error while sending UDP message to {} => {}",
-                                        target.to_string(),
+                                        target.addr.to_string(),
                                         e.to_string(),
                                     );
                                 }
@@ -122,27 +124,17 @@ impl UdpHandler {
 }
 
 impl Handler for UdpHandler {
-    fn send(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
+    fn send(&self, buf: &[u8]) -> Result<Vec<u8>> {
         let mut res = [0u8; 512];
-        let mut timed_outs = Vec::with_capacity(self.targets.len());
         let mut sent = false;
-
-        for (i, target) in self.targets.iter().enumerate() {
-            if target.is_ipv6() && !self.use_ipv6 {
-                continue    
-            }
-            
-            if self.failures.read().expect("failures lock may be poisoned").len() == self.targets.len() {
-                bail!("all of the resolve targets are unavailable")
-            }
-
-            if self.failures.read().expect("failures lock may be poisoned").contains(&i) {
-                continue;
-            }
-
-            if let Err(e) = self.socket.send_to(buf, target) {
+        let mut queue = self.targets.write().expect("");
+        
+        while let Some(target) = queue.fetch() {
+            if let Err(e) = self.socket.send_to(buf, target.addr) {
                 if is_timeout(&e) {
-                    timed_outs.push(i);
+                    if let Some(target) = queue.remove() {
+                        self.failures.write().unwrap().push(target);
+                    }
 
                     continue;
                 }
@@ -152,33 +144,33 @@ impl Handler for UdpHandler {
 
             if let Err(e) = self.socket.recv_from(&mut res) {
                 if is_timeout(&e) {
-                    timed_outs.push(i);
+                    if let Some(target) = queue.remove() {
+                        self.failures.write().unwrap().push(target);
+                    }
 
                     continue;
                 }
 
                 bail!(e);
             }
-
+            
             sent = true;
-            break;
+            break
         }
 
-        self.failures.write().expect("failures lock may be poisoned").append(&mut timed_outs);
-
         if !sent {
-            bail!("Couldn't send request to any of the given addresses")
+            bail!("all of the given addresses failed to serve the request")
         }
 
         Ok(res.to_vec())
     }
 
-    fn send_to(&mut self, buf: &[u8], addrs: &[SocketAddr]) -> Result<Vec<u8>> {
+    fn send_to(&self, buf: &[u8], addrs: &[SocketAddr]) -> Result<Vec<u8>> {
         let mut res = vec![0; 512];
         let mut sent = false;
         
         for addr in addrs {
-            if addr.is_ipv6() && !self.use_ipv6 {
+            if addr.is_ipv6() && !self.ctx.server.enable_ipv6 {
                 continue
             }
             
@@ -207,7 +199,7 @@ impl Handler for UdpHandler {
         }
 
         if !sent {
-            bail!("Couldn't send request to any of the given addresses")
+            bail!("all of the given addresses failed to serve the request")
         }
         
         Ok(res)
@@ -222,6 +214,185 @@ impl Drop for UdpHandler {
     }
 }
 
+#[derive(Default, PartialEq, Eq, Copy, Clone)]
+pub enum HandlerStrategy {
+    #[default]
+    Standard,
+    RoundRobin
+}
+
+impl HandlerStrategy {
+    pub fn from(s: &str) -> Self {
+        match s { 
+            "round-robin" => Self::RoundRobin,
+            _ => Self::Standard
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct HandlerTarget {
+    pub addr: SocketAddr,
+    pub weight: usize,
+    pub timeout: Option<Duration>
+}
+
+impl HandlerTarget {
+    pub fn from_addr(addr: SocketAddr) -> Self {
+        Self {
+            addr,
+            weight: 1,
+            timeout: None
+        }
+    }
+}
+
+pub trait HandlerQueue: Send + Sync {
+    fn fetch(&mut self) -> Option<HandlerTarget>;
+    fn next(&mut self) -> Option<HandlerTarget>;
+    fn push(&mut self, target: HandlerTarget);
+    fn remove(&mut self) -> Option<HandlerTarget>;
+}
+
+pub struct StandardQueue {
+    targets: Vec<HandlerTarget>,
+    offset: usize
+}
+
+impl StandardQueue {
+    pub fn new(targets: Vec<HandlerTarget>) -> Self {
+        Self {
+            targets,
+            offset: 0
+        }
+    }
+}
+
+impl HandlerQueue for StandardQueue {
+    fn fetch(&mut self) -> Option<HandlerTarget> {
+        if let Some(target) = self.targets.get(self.offset) {
+            return Some(target.clone());
+        }
+
+        // reset offset if we are at the end of the queue
+        self.offset = 0;
+        if self.targets.len() > 0 {
+            return self.fetch();
+        }
+
+        None
+    }
+    
+    fn next(&mut self) -> Option<HandlerTarget> {
+        self.offset += 1;
+        
+        self.fetch()
+    }
+
+    fn push(&mut self, target: HandlerTarget) {
+        self.targets.push(target);
+    }
+    
+    fn remove(&mut self) -> Option<HandlerTarget> {
+        if self.offset >= self.targets.len() {
+            return None;
+        }
+        
+        let target = self.targets.remove(self.offset);
+        self.offset += 1;
+        
+        Some(target)
+    }
+}
+
+pub struct RoundRobinQueue {
+    targets: Vec<HandlerTarget>,
+    offset: usize,
+    counter: usize
+}
+
+impl RoundRobinQueue {
+    pub fn new(targets: Vec<HandlerTarget>) -> Self {
+        Self {
+            targets,
+            offset: 0,
+            counter: 0
+        }
+    }
+}
+
+impl HandlerQueue for RoundRobinQueue {
+    fn fetch(&mut self) -> Option<HandlerTarget> {
+        if let Some(target) = self.targets.get(self.offset) {
+            self.counter += 1;
+
+            if self.counter == target.weight {
+                self.offset += 1;
+                self.counter = 0;
+            }
+
+            return Some(target.clone());
+        }
+
+        // reset offset if we are at the end of the queue
+        self.offset = 0;
+        if self.targets.len() > 0 {
+            return self.fetch();
+        }
+
+        None
+    }
+    
+    fn next(&mut self) -> Option<HandlerTarget> {
+        self.offset += 1;
+        self.counter = 0;
+        
+        self.fetch()
+    }
+
+    fn push(&mut self, target: HandlerTarget) {
+        self.targets.push(target)
+    }
+
+    fn remove(&mut self) -> Option<HandlerTarget> {
+        if self.offset >= self.targets.len() {
+            return None;
+        }
+
+        let target = self.targets.remove(self.offset);
+        self.offset += 1;
+
+        Some(target)
+    }
+}
+
 fn is_timeout(err: &Error) -> bool {
     err.kind() == ErrorKind::WouldBlock || err.kind() == ErrorKind::TimedOut
+}
+
+fn get_queue(ctx: Arc<Context>) -> Result<Box<dyn HandlerQueue>> {
+    let mut targets = Vec::new();
+
+    match &ctx.server.mode {
+        ServerMode::Proxy { forward, strategy, .. } => {
+            forward.iter().for_each(|target| {
+                if target.addr.is_ipv6() && !ctx.server.enable_ipv6 {
+                    return;
+                }
+                
+                targets.push(target.clone());
+            });
+            
+            match strategy {
+                HandlerStrategy::Standard => Ok(Box::new(StandardQueue::new(targets))),
+                HandlerStrategy::RoundRobin => Ok(Box::new(RoundRobinQueue::new(targets)))
+            }
+        },
+        ServerMode::Recursive => {
+            targets.append(&mut get_root_servers_socket_addrs(ctx.server.enable_ipv6));
+            
+            Ok(Box::new(StandardQueue::new(targets)))
+        },
+        _ => bail!("{} is not supposed to use a handler", ctx.server.mode),
+    }
 }

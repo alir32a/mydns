@@ -1,12 +1,9 @@
-use std::ops::{Deref, Index};
 use crate::zone::token::{Token, TokenType};
 use anyhow::Result;
 
 #[derive(Default)]
 pub struct Scanner {
     lines: Vec<String>,
-    offset: usize,
-    current: u16,
 }
 
 impl Scanner {
@@ -15,8 +12,6 @@ impl Scanner {
 
         Ok(Self {
             lines: source.lines().map(|val| val.to_string()).collect::<Vec<String>>(),
-            current: 1,
-            ..Default::default()
         })
     }
     

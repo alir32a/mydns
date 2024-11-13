@@ -1,12 +1,13 @@
 use std::collections::{HashMap};
 use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::ops::Deref;
 use std::path::PathBuf;
-use std::time::Duration;
 use std::sync::Arc;
 use anyhow::{bail, Result};
 use rand::{random};
 use tracing::{error};
 use crate::cache::{DnsCache, DnsCacheItem};
+use crate::context::Context;
 use crate::query_type::QueryType;
 use crate::handler::{Handler, UdpHandler};
 use crate::packet::Packet;
@@ -14,12 +15,11 @@ use crate::parser::PacketParser;
 use crate::question::Question;
 use crate::record::{Record, RecordData};
 use crate::result_code::ResultCode;
-use crate::root::{get_root_servers_socket_addrs};
 use crate::writer::PacketWriter;
 use crate::zone::parser::Zone;
 
-pub trait Resolver {
-    fn resolve(&mut self, buf: &[u8]) -> Result<Vec<u8>>;
+pub trait Resolver: Send + Sync {
+    fn resolve(&self, buf: Arc<Vec<u8>>) -> Result<Vec<u8>>;
 }
 
 pub struct AuthoritativeResolver {
@@ -54,8 +54,8 @@ impl AuthoritativeResolver {
 }
 
 impl Resolver for AuthoritativeResolver {
-    fn resolve(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
-        let req = match PacketParser::new(buf).parse() {
+    fn resolve(&self, buf: Arc<Vec<u8>>) -> Result<Vec<u8>> {
+        let req = match PacketParser::new(buf.deref()).parse() {
             Ok(packet) => packet,
             Err(_e) => {
                 let mut res = Packet::new();
@@ -131,31 +131,31 @@ impl Resolver for AuthoritativeResolver {
 }
 
 pub struct RecursiveResolver {
-    pub base_handler: Box<dyn Handler>,
+    pub base_handler: Box<dyn Handler + Send + Sync>,
     cache: Arc<DnsCache>,
-    max_recursion_depth: u16,
+    max_recursion_depth: usize,
 }
 
 impl RecursiveResolver {
-    pub fn new() -> Self {
+    pub fn new(ctx: Arc<Context>) -> Self {
         Self {
-            base_handler: Box::new(UdpHandler::new(get_root_servers_socket_addrs(false), Duration::from_secs(5), false)),
+            base_handler: Box::new(UdpHandler::new(ctx.clone())),
             cache: Arc::new(DnsCache::new()),
-            max_recursion_depth: 10
+            max_recursion_depth: ctx.resolver.max_recursion_depth
         }
     }
 
     pub fn recursive_lookup(
-        &mut self,
+        &self,
         question: &Question,
         addrs: Option<Vec<SocketAddr>>,
-        depth: u16
+        depth: usize
     ) -> Result<Packet> {
         if depth == self.max_recursion_depth {
             bail!("maximum resolve recursion depth exceeded")
         }
 
-        let res = lookup(self.cache.clone(), &mut self.base_handler, &question, addrs)?;
+        let res = lookup(self.cache.clone(), &self.base_handler, &question, addrs)?;
         
         if is_resolved(question, &res) {
             return Ok(res);
@@ -195,7 +195,7 @@ impl RecursiveResolver {
         Ok(res)
     }
     
-    fn get_unresolved(&mut self, authorities: &Vec<Record>) -> Result<Vec<SocketAddr>> {
+    fn get_unresolved(&self, authorities: &Vec<Record>) -> Result<Vec<SocketAddr>> {
         let mut res: Vec<SocketAddr> = Vec::new();
 
         for authority in authorities {
@@ -230,8 +230,8 @@ impl RecursiveResolver {
 }
 
 impl Resolver for RecursiveResolver {
-    fn resolve(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
-        let req = PacketParser::new(buf).parse()?;
+    fn resolve(&self, buf: Arc<Vec<u8>>) -> Result<Vec<u8>> {
+        let req = PacketParser::new(buf.deref()).parse()?;
         let mut res = Packet::from(&req);
         res.header.recursion_available = true;
         res.header.response = true;
@@ -267,28 +267,22 @@ impl Resolver for RecursiveResolver {
 }
 
 pub struct ForwardResolver {
-    pub base_handler: Box<dyn Handler>,
+    pub base_handler: Box<dyn Handler + Send + Sync>,
     cache: Arc<DnsCache>,
 }
 
 impl ForwardResolver {
-    pub fn new(addrs: Vec<SocketAddr>) -> Self {
-        let handler = UdpHandler::new(
-            addrs,
-            Duration::from_secs(5),
-            false
-        );
-
+    pub fn new(ctx: Arc<Context>) -> Self {
         Self {
-            base_handler: Box::new(handler),
+            base_handler: Box::new(UdpHandler::new(ctx.clone())),
             cache: Arc::new(DnsCache::new())
         }
     }
 }
 
 impl Resolver for ForwardResolver {
-    fn resolve(&mut self, buf: &[u8]) -> Result<Vec<u8>> {
-        let req = PacketParser::new(buf).parse()?;
+    fn resolve(&self, buf: Arc<Vec<u8>>) -> Result<Vec<u8>> {
+        let req = PacketParser::new(buf.deref()).parse()?;
         let mut res = Packet::from(&req);
         res.header.recursion_available = true;
         res.header.response = true;
@@ -303,7 +297,7 @@ impl Resolver for ForwardResolver {
         }
 
         for question in req.questions {
-            if let Ok(result) = lookup(self.cache.clone(), &mut self.base_handler, &question, None) {
+            if let Ok(result) = lookup(self.cache.clone(), &self.base_handler, &question, None) {
                 append_results(&mut res, result);
             } else {
                 res.header.code = ResultCode::SERVFAIL.to_u8();
@@ -318,7 +312,7 @@ impl Resolver for ForwardResolver {
 
 pub fn lookup(
     cache: Arc<DnsCache>,
-    handler: &mut Box<dyn Handler>, 
+    handler: &Box<dyn Handler + Send + Sync>,
     question: &Question, 
     addrs: Option<Vec<SocketAddr>>)
     -> Result<Packet> {

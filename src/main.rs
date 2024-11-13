@@ -33,6 +33,8 @@ async fn main() {
     tracing::subscriber::set_global_default(subscriber).expect("Failed to initialize logger");
 
     let args = Args::parse();
+    
+    let ctx = Context::from(args).unwrap();
 
     println!(r"
    __  _____  _____  _  ______
@@ -40,11 +42,9 @@ async fn main() {
  / /|_/ /  \  / // /    /\ \  
 /_/  /_/   /_/____/_/|_/___/
     ");
-    
-    let ctx = Context::from(args).unwrap();
 
     let dns_server = UdpDnsServer::new(ctx);
-    if let Err(e) = dns_server.start() {
+    if let Err(e) = dns_server.start().await {
         error!("Failed to start dns server: {}", e.to_string())
     }
 }
