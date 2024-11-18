@@ -1,9 +1,11 @@
 use std::io::{Error, ErrorKind};
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use rand::{thread_rng, Rng};
 use anyhow::{bail, Result};
 use log::info;
+use serde::Deserialize;
 use tokio::{
     select,
     time::{
@@ -83,7 +85,7 @@ impl UdpHandler {
                             match socket.send_to(buf.as_slice(), target.addr) {
                                 Ok(n) => {
                                     if n == 0 {
-                                        error!("Unable to send UDP message to {}", target.addr.to_string());
+                                        error!("Got an error while retrying {}", target.addr.to_string());
 
                                         continue;
                                     }
@@ -96,7 +98,7 @@ impl UdpHandler {
                                         },
                                         Err(e) => {
                                             error!(
-                                                "Got an error while receiving UDP message to \
+                                                "Got an error while retrying \
                                                 {} => {}",
                                                 target.addr.to_string(),
                                                 e.to_string(),
@@ -106,7 +108,7 @@ impl UdpHandler {
                                 },
                                 Err(e) => {
                                     error!(
-                                        "Got an error while sending UDP message to {} => {}",
+                                        "Got an error while retrying {} => {}",
                                         target.addr.to_string(),
                                         e.to_string(),
                                     );
@@ -135,6 +137,8 @@ impl Handler for UdpHandler {
                     if let Some(target) = queue.remove() {
                         self.failures.write().unwrap().push(target);
                     }
+                    
+                    error!("{} not responding, moving to the next resource", target.addr);
 
                     continue;
                 }
@@ -147,6 +151,8 @@ impl Handler for UdpHandler {
                     if let Some(target) = queue.remove() {
                         self.failures.write().unwrap().push(target);
                     }
+
+                    error!("{} not responding, moving to the next resource", target.addr);
 
                     continue;
                 }
@@ -214,7 +220,7 @@ impl Drop for UdpHandler {
     }
 }
 
-#[derive(Default, PartialEq, Eq, Copy, Clone)]
+#[derive(Default, PartialEq, Eq, Copy, Clone, Deserialize)]
 pub enum HandlerStrategy {
     #[default]
     Standard,
@@ -230,19 +236,35 @@ impl HandlerStrategy {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Deserialize)]
 pub struct HandlerTarget {
     pub addr: SocketAddr,
     pub weight: usize,
-    pub timeout: Option<Duration>
 }
 
 impl HandlerTarget {
+    pub fn new(addr: &str, default_port: u16, weight: usize) -> Result<Self> {
+        let socket_addr: SocketAddr;
+        
+        match SocketAddr::from_str(addr) { 
+            Ok(addr) => {
+                socket_addr = addr;
+            },
+            Err(_e) => {
+                socket_addr = SocketAddr::new(IpAddr::from_str(addr)?, default_port)
+            }
+        }
+        
+        Ok(Self {
+            addr: socket_addr,
+            weight
+        })
+    }
+    
     pub fn from_addr(addr: SocketAddr) -> Self {
         Self {
             addr,
             weight: 1,
-            timeout: None
         }
     }
 }

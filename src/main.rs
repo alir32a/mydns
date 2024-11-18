@@ -18,12 +18,14 @@ mod cache;
 mod zone;
 mod args;
 mod duration;
+mod config;
+mod fs;
 
 use clap::{Parser};
 use tracing::{error, Level};
 use tracing_subscriber::FmtSubscriber;
 use crate::args::Args;
-use crate::context::Context;
+use crate::context::{Context, ListenerProtocol};
 use crate::server::{DnsServer, UdpDnsServer};
 
 #[tokio::main]
@@ -42,9 +44,16 @@ async fn main() {
  / /|_/ /  \  / // /    /\ \  
 /_/  /_/   /_/____/_/|_/___/
     ");
-
-    let dns_server = UdpDnsServer::new(ctx);
-    if let Err(e) = dns_server.start().await {
-        error!("Failed to start dns server: {}", e.to_string())
+    
+    match ctx.listener.proto {
+        ListenerProtocol::UDP => {
+            let dns_server = UdpDnsServer::new(ctx);
+            if let Err(e) = dns_server.start().await {
+                error!("Failed to start dns server: {}", e.to_string())
+            }
+        },
+        _ => {
+            error!("{} is not supported yet", ctx.listener.proto)
+        }
     }
 }

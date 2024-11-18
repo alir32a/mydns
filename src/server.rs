@@ -37,7 +37,7 @@ impl DnsServer for UdpDnsServer {
             }
         }
         
-        info!("Running in mode {}", self.ctx.server.mode);
+        info!("Running in {} mode", self.ctx.server.mode);
 
         let listener = &self.ctx.listener;
 

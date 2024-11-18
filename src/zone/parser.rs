@@ -241,7 +241,7 @@ fn parse_keywords(keyword: Token, value: Token, res: &mut Zone) -> Result<()> {
                         Ok(ttl) => {
                             res.ttl = Some(ttl)
                         },
-                        Err(e) => {
+                        Err(_e) => {
                             bail!("invalid input for ttl {} at line {}", value.lexeme, value.line)
                         }
                     }

@@ -5,6 +5,7 @@ use tokio::time::{Duration, Instant};
 use crate::record::Record;
 use crate::record::RecordData::SOA;
 
+#[derive(Default)]
 pub struct DnsCache {
     map: RwLock<HashMap<String, DnsCacheItem>>
 }

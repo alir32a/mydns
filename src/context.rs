@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
-use std::ops::Add;
+use std::ops::{Add};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -9,6 +9,9 @@ use crate::cache::DnsCache;
 use anyhow::{bail, Result};
 use crate::handler::{HandlerStrategy, HandlerTarget};
 use tokio::net::{ToSocketAddrs};
+use tracing::error;
+use crate::config::{load_config, Config, ForwardAddr, Mode};
+use crate::duration::parse;
 
 pub struct Context {
     pub(crate) cache: DnsCache,
@@ -19,55 +22,87 @@ pub struct Context {
 
 impl Context {
     pub fn from(args: Args) -> Result<Self> {
-        let cache = DnsCache::new();
-        let listener = ListenerContext::from(&args);
+        let mut cfg = Self::load_config(&args.config_file);
+        cfg = cfg.apply_args(args);
+        
+        let mode = Self::get_server_mode(&cfg)?;
+        let proto = ListenerProtocol::from(cfg.listener.proto.unwrap_or_default());
 
-        if let Some(zones) = &args.zones {
-            return Ok(
-                Self {
-                    cache,
-                    listener,
-                    server: ServerContext{
-                        mode: ServerMode::Authoritative {
-                            zones: PathBuf::from(zones),
-                            nested_zones: args.nested_zones
-                        },
-                        ..Default::default()
-                    },
-                    resolver: Default::default()
-                }
-            )
-        }
-        
-        if let Some(addrs) = args.forward {
-            return Ok(
-                Self {
-                    cache,
-                    listener,
-                    server: ServerContext {
-                        mode: ServerMode::Proxy {
-                            forward: to_handler_targets(addrs, args.default_forward_port)?,
-                            strategy: Default::default(), // you cannot set round-robin from args
-                            default_port: args.default_forward_port,
-                        },
-                        ..Default::default()
-                    },
-                    resolver: Default::default()
-                }
-            )
-        }
-        
-        Ok(
-            Self {
-                cache,
-                listener,
-                server: ServerContext {
-                    ..Default::default()
-                },
-                resolver: Default::default()
+        Ok(Self {
+            cache: DnsCache::new(),
+            listener: ListenerContext {
+                host: cfg.listener.host.unwrap_or("0.0.0.0".to_string()),
+                port: cfg.listener.port.unwrap_or(53),
+                proto,
+                max_packet_buf: cfg.listener.max_packet_buf.unwrap_or(512)
+            },
+            server: ServerContext {
+                retry_interval: parse(&cfg.server.retry_interval.unwrap_or("5s".to_string()))?,
+                default_timeout: parse(&cfg.server.default_timeout.unwrap_or("3s".to_string()))?,
+                enable_ipv6: cfg.server.enable_ipv6.unwrap_or_default(),
+                mode,
+            },
+            resolver: ResolverContext {
+                max_recursion_depth: cfg.resolver.max_recursion_depth.unwrap_or(10),
+                max_parse_jumps: cfg.resolver.max_parse_jumps.unwrap_or(6)
             }
-        )
+        })
     }
+    
+    fn load_config(path: &Option<String>) -> Config {
+        match load_config(path.clone()) {
+            Ok(mut cfg) => {
+                if cfg.server.authoritative.is_some() {
+                    cfg.mode = Mode::AUTHORITATIVE;
+                }
+                
+                if cfg.server.forward.is_some() {
+                    cfg.mode = Mode::PROXY
+                }
+                
+                cfg
+            },
+            Err(e) => {
+                if let Some(p) = path {
+                    error!("couldn't load {} file, {}", p, e.to_string())
+                }
+                
+                Default::default()
+            }
+        }
+    }
+    
+    fn get_server_mode(cfg: &Config) -> Result<ServerMode> {
+        match cfg.mode { 
+            Mode::RECURSIVE => Ok(ServerMode::Recursive),
+            Mode::AUTHORITATIVE => {
+                Ok(ServerMode::Authoritative {
+                    zones: cfg.server.authoritative.clone().unwrap_or_default().zones.unwrap_or_default(),
+                    nested_zones: cfg.server.authoritative.clone().unwrap_or_default().nested_zones.unwrap_or_default(),
+                })
+            },
+            Mode::PROXY => {
+                match &cfg.server.forward { 
+                    Some(forward) => {
+                        Ok(ServerMode::Proxy {
+                            forward: Self::get_handler_targets(&forward.addrs, forward.default_port.unwrap_or(53))?,
+                            strategy: HandlerStrategy::from(&forward.strategy.clone().unwrap_or_default()),
+                            default_port: forward.default_port.unwrap_or(53),
+                        })
+                    },
+                    None => bail!("forward addresses are empty, nowhere to forward")
+                }
+            },
+        }
+    }
+    
+    fn get_handler_targets(addrs: &Vec<ForwardAddr>, default_port: u16) -> Result<Vec<HandlerTarget>> {
+        let targets = addrs.iter().map(|addr| {
+            HandlerTarget::new(&addr.addr, default_port, addr.weight.unwrap_or_default())
+        }).collect::<Result<Vec<HandlerTarget>>>()?;
+
+        Ok(targets)
+    } 
 }
 
 pub struct ServerContext {
@@ -137,19 +172,10 @@ impl ListenerContext {
     pub fn to_addr(&self) -> impl ToSocketAddrs + '_ {
         (self.host.as_str(), self.port)
     }
-
-    fn from(args: &Args) -> Self {
-        Self {
-            host: args.host.to_owned(),
-            port: args.port,
-            proto: ListenerProtocol::from(&args.proto),
-            max_packet_buf: 512
-        }
-    }
 }
 
 impl Display for ListenerContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}:///{}:{}", self.proto, self.host, self.port)
     }
 }
@@ -162,7 +188,7 @@ pub enum ListenerProtocol {
 }
 
 impl ListenerProtocol {
-    pub fn from(proto: &String) -> Self {
+    pub fn from(proto: String) -> Self {
         match proto.to_lowercase().as_str() {
             "tcp" => Self::TCP,
             _ => Self::UDP
@@ -171,7 +197,7 @@ impl ListenerProtocol {
 }
 
 impl Display for ListenerProtocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ListenerProtocol::UDP => write!(f, "udp"),
             ListenerProtocol::TCP => write!(f, "tcp")
@@ -191,11 +217,7 @@ pub enum CacheContext {
 }
 
 pub struct DatabaseContext {
-    host: String,
-    port: u16,
-    user: String,
-    password: String,
-    db: String
+    path: PathBuf
 }
 
 pub struct ResolverContext {
@@ -210,30 +232,6 @@ impl Default for ResolverContext {
             max_parse_jumps: 6
         }
     }
-}
-
-fn to_handler_targets(addrs: Vec<String>, default_port: u16) -> Result<Vec<HandlerTarget>> {
-    let mut res = Vec::new();
-
-    for addr in addrs {
-        match SocketAddr::from_str(&addr) {
-            Ok(addr) => {
-                res.push(HandlerTarget::from_addr(addr))
-            },
-            Err(_e) => {
-                match IpAddr::from_str(&addr) {
-                    Ok(ip_addr) => {
-                        res.push(HandlerTarget::from_addr(SocketAddr::new(ip_addr, default_port)))
-                    },
-                    Err(_e) => {
-                        bail!("{} is not a valid address", addr)
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(res)
 }
 
 fn join_addrs(targets: &Vec<HandlerTarget>, sep: &str) -> String {
